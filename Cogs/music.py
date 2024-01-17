@@ -1094,7 +1094,7 @@ class MusicController():
             if await check_voice_state(vc=vc) is True:
                 print("no more user")
                 del self.bot.music_queues[server_id]
-                del self.bot.voice_clients[server_id]
+                del self.voice_clients[server_id]
                 await vc.disconnect()
                 chann = self.bot.get_channel(896275056089530380)
                 await self.bot.change_presence(activity=activity)
@@ -1739,7 +1739,7 @@ class Music(commands.Cog):
                 await FavSongsDbHandler(self.bot.db_conn, self.bot.cursor, songName, str(ctx.author.id))
 
             if ctx.guild.id in self.music_controler.voice_clients:
-                vc = self.bot.voice_clients[ctx.guild.id]
+                vc = self.music_controler.voice_clients[ctx.guild.id]
                 for i in out:
                     if i is not None:
                         await self.music_controler.add_to_queue(ctx.guild.id, i)
@@ -2039,10 +2039,10 @@ class Music(commands.Cog):
                 embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
                 return await ctx.send(embed=embed, ephemeral=True)
             # Get the voice client associated with the server
-            if ctx.guild.id not in self.bot.voice_clients:
+            if ctx.guild.id not in self.music_controler.voice_clients:
                 return await ctx.send("Trapard est dans aucun vocal, tu es one head ou quoi ?", ephemeral=True)
             cur_track = self.bot.current_track[ctx.guild.id]
-            vc: discord.VoiceClient = self.bot.voice_clients[ctx.guild.id]
+            vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
             storeSkippedSong(cur_track, str(ctx.author.id))
             # Stop the current player and move to the next one
             vc.stop()
@@ -2238,7 +2238,7 @@ class Music(commands.Cog):
             musicList = getMusicList(playliste_name_val)
             if musicList is None:
                 return await ctx.send(f"La playlist : `{playliste_name_val}` ne semble pas exister !", ephemeral=True)
-            if ctx.guild.id in self.bot.voice_clients:
+            if ctx.guild.id in self.music_controler.voice_clients:
                 if not shuffle:
                     vc = user_vocal.connect()
                     for music in musicList:
