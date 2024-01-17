@@ -1532,12 +1532,8 @@ class Misc(commands.Cog):
 
     @commands.command()
     async def source(self, ctx: commands.Context, *, command: str = None):
-        """Displays my full source code or for a specific command.
-
-        To display the source code of a subcommand you can separate it by
-        periods, e.g. tag.create for the create subcommand of the tag command
-        or by spaces.
-        """
+        """Affiche le code source de la commande souhaité."""
+        # Code used from https://github.com/Rapptz/RoboDanny/blob/rewrite/cogs/meta.py#L405-L446
         source_url = 'https://github.com/reusteur73/Trapard'
         branch = 'master'
         if command is None:
