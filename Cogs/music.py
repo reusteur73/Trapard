@@ -1738,7 +1738,7 @@ class Music(commands.Cog):
             for songName in out:
                 await FavSongsDbHandler(self.bot.db_conn, self.bot.cursor, songName, str(ctx.author.id))
 
-            if ctx.guild.id in self.bot.voice_clients:
+            if ctx.guild.id in self.music_controler.voice_clients:
                 vc = self.bot.voice_clients[ctx.guild.id]
                 for i in out:
                     if i is not None:
