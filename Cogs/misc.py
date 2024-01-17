@@ -1,4 +1,4 @@
-import os, discord, random, asyncio, datetime, torch
+import os, discord, random, asyncio, datetime, torch, inspect
 from discord.ui import UserSelect
 from discord import app_commands
 from .utils.functions import LogErrorInWebhook, format_duration, load_json_data, create_embed, command_counter, printFormat, convert_str_to_emojis, trapcoins_handler, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int
@@ -1529,6 +1529,37 @@ class Misc(commands.Cog):
             return await interaction.send(f"Voilà ton TTS {interaction.author.display_name}!", file=discord.File(f"{FILES_PATH}tts.mp3"))
         except Exception:
             LogErrorInWebhook()
+
+    @commands.command()
+    async def source(self, ctx: commands.Context, *, command: str = None):
+        """Displays my full source code or for a specific command.
+
+        To display the source code of a subcommand you can separate it by
+        periods, e.g. tag.create for the create subcommand of the tag command
+        or by spaces.
+        """
+        source_url = 'https://github.com/reusteur73/Trapard'
+        branch = 'master'
+        if command is None:
+            return await ctx.send(source_url)
+
+        obj = self.bot.get_command(command.replace('.', ' '))
+        if obj is None:
+            return await ctx.send('Cette commande ne semble pas exister.')
+
+        # since we found the command we're looking for, presumably anyway, let's
+        # try to access the code itself
+        src = obj.callback.__code__
+        module = obj.callback.__module__
+        filename = src.co_filename
+
+        lines, firstlineno = inspect.getsourcelines(src)
+        if filename is None:
+            return await ctx.send('Impossible de trouver la source de cette commande.')
+        location = os.path.relpath(filename).replace('\\', '/')
+
+        final_url = f'<{source_url}/blob/{branch}/{location}#L{firstlineno}-L{firstlineno + len(lines) - 1}>'
+        await ctx.send(final_url)
 
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     
