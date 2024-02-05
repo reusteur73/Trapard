@@ -6,10 +6,11 @@ import discord, time, datetime, os
 from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
+from asqlite import Pool
 
 APIKEY = os.environ.get("CRYPTO_API")
 
-async def xp_calculation(user_id: str, conn, cursor):
+async def xp_calculation(user_id: str, pool: Pool):
     """
         Calculate the xp of the user
         Xp needed per level = 500
@@ -18,9 +19,9 @@ async def xp_calculation(user_id: str, conn, cursor):
         1 command used = 1 xp
     """
     try:
-        handler = Trapardeur(conn=conn, cursor=cursor, userId=user_id)
+        handler = Trapardeur(pool=pool, userId=user_id)
         data = await handler.get()
-        xp = (data[0][2] * 2 / 600) + data[0][3] + data[0][4]
+        xp = (int(data[0][2]) * 2 / 600) + int(data[0][3]) + int(data[0][4])
         return xp
     except Exception as e:
         LogErrorInWebhook(error=f"[XP CALCULATION] {e} DATA={data}")
@@ -211,12 +212,14 @@ class Tasks(commands.Cog):
         try:
             async def scrape_cpasbien():
                 async def insert_in_db(title: str):
-                    await self.bot.cursor.execute(f'INSERT INTO cpasbien (title_name) VALUES ("{title}")')
-                    await self.bot.db_conn.commit()
+                    async with self.bot.pool.acquire() as conn:
+                        async with conn.transaction():
+                            await conn.execute(f'INSERT INTO cpasbien (title_name) VALUES ("{title}")')
+                    return
                 
                 async def get_titles():
-                    await self.bot.cursor.execute("SELECT title_name from cpasbien")
-                    return await self.bot.cursor.fetchall()
+                    async with self.bot.pool.acquire() as conn:
+                        return await conn.fetchall("SELECT title_name from cpasbien")
                     
                 maintenant = datetime.datetime.now()
                 format_date = maintenant.strftime("%d/%m/%y à %Hh%M")
@@ -249,7 +252,6 @@ class Tasks(commands.Cog):
                         returned_data[i] = {"text": val["text"], "lien": val["lien"]}
                         await insert_in_db(val["text"])
                         found += 1
-                    await self.bot.db_conn.commit()
                     blocks = []
                     if found == 0:
                         return
@@ -280,13 +282,13 @@ class Tasks(commands.Cog):
             await scrape_cpasbien()
         except: LogErrorInWebhook()
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=5)
     async def check_users_xp(self):
             # data = load_json_data(item="trapeur")
-            data = await Trapardeur(conn=self.bot.db_conn, cursor=self.bot.cursor).get_all()
+            data = await Trapardeur(pool=self.bot.pool).get_all()
             for i in data:
                 try:
-                    xp = await xp_calculation(user_id=i[1], cursor=self.bot.cursor, conn=self.bot.db_conn)
+                    xp = await xp_calculation(user_id=i[1], pool=self.bot.pool)
                     if i[1] not in self.trapeur_xp:
                         self.trapeur_xp[i[1]] = xp
                     else:

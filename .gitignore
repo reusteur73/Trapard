@@ -1,3 +1,4 @@
 files/musics/*
 files/*
+Cogs/utils/path.py
 *.pyc

@@ -30,18 +30,16 @@ log = logging.getLogger(name="app.log")
 
 DEBUG = True
 
-def get_unique_downloader():
+async def get_unique_downloader(pool: asqlite.Pool):
     """
     return list of unique userid music downloader.
     """
-    with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-        data = json.loads(f.read())
-    uniques_id = []
-    for _, val in data.items():
-        if int(val[2]) > 10000000:
-            uniques_id.append(val[2])
-    return set(uniques_id)
-
+    async with pool.acquire() as conn:
+        data = await conn.fetchall("SELECT DISTINCT downloader FROM musiques;")
+    out = []
+    for item in data:
+        out.append(item[0])
+    return out
 
 class Trapard(commands.Bot):
     user: discord.ClientUser
@@ -81,8 +79,7 @@ class Trapard(commands.Bot):
         self.session = aiohttp.ClientSession()
 
         # Setting db 
-        self.db_conn = await asqlite.connect(DB_PATH)
-        self.cursor = await self.db_conn.cursor()
+        self.pool: asqlite.Pool = await asqlite.create_pool(DB_PATH)
 
         # setting music values
         self.music_queues = {}
@@ -121,12 +118,14 @@ class Trapard(commands.Bot):
         self.owner_id = self.bot_app_info.owner.id
 
         # Load unique music downloader
-        self.unique_downloader = get_unique_downloader()
+        self.unique_downloader = await get_unique_downloader(pool=self.pool)
+        print(self.unique_downloader)
         for user_id in self.unique_downloader:
             if str(user_id) == "1065781211219370104":
                 continue
             name = await fetch_diplay_name(user_id, self)
             self.unique_downloader_display_names[user_id] = name
+        
 
         # Loading cogs
         for extension in initial_extensions:
@@ -456,10 +455,9 @@ class Trapard(commands.Bot):
     async def close(self) -> None:
         for vc in self.voice_clients:
             vc.cleanup()
-        await super().close()
         await self.session.close()
-        await self.cursor.close()
-        await self.db_conn.close()
+        await self.pool.close()
+        await super().close()
 
     async def on_member_join(self, member: discord.Member):
         guild = member.guild
@@ -520,7 +518,7 @@ class Trapard(commands.Bot):
                     else:
                         self.day_vocal_time[member.id] += time_spent
                     
-                    handler = Trapardeur(conn=self.db_conn, cursor=self.cursor, userId=str(member.id))
+                    handler = Trapardeur(pool=self.pool, userId=str(member.id))
                     if await handler.is_in():
                         prev = await handler.get()
                         await handler.update(userId=str(member.id), vocalTime=prev[0][2] + int(time_spent), messageSent=prev[0][3], commandSent=prev[0][4])

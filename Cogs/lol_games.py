@@ -42,14 +42,8 @@ class LolGames(commands.Cog):
     async def check_lol_games(self):
         try:
             APIKEY = os.environ.get("RIOT_API")
-            await self.bot.cursor.execute("PRAGMA table_info(LoLGamesTracker)")
-            table_info = await self.bot.cursor.fetchall()
-            # print("Structure de la table LoLGamesTracker :", table_info)
-
-            # Exécutez la requête pour obtenir les données de la table LoLGamesTracker
-            await self.bot.cursor.execute("SELECT id, userId, ign, puuid, region, last_game_id FROM LoLGamesTracker")
-            data = await self.bot.cursor.fetchall()
-
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT id, userId, ign, puuid, region, last_game_id FROM LoLGamesTracker")
             # Affichez les données de la table
             for row in data:
                 print(dict(row))
@@ -469,8 +463,6 @@ class LolGames(commands.Cog):
                     url = f"https://europe.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}"
                 reponse = await self.bot.session.get(url)
 
-                gametype = reponse.json()["info"]["queueId"]
-
                 data = await reponse.json()
                 
                 try: participants = data["info"]["participants"]
@@ -669,11 +661,10 @@ class LolGames(commands.Cog):
                                 url = RUNES_BASE_URL + rune['icon']
                                 break
                 if url:
-                    data = await self.bot.session.get(url, stream=True)
-                    if data:
-                        return Image.open(io.BytesIO(data.content))
-                    else:
-                        return None
+                    async with self.bot.session.get(url) as data:
+                        data.raise_for_status
+                        content = await data.read()
+                    return Image.open(io.BytesIO(content))
                 return None
             
             async def getChampionIconByID(championID: int, api_version) -> io.BytesIO:
@@ -797,7 +788,7 @@ class LolGames(commands.Cog):
                                     tier_bonus = 0
                                 
                                 match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid)
-                                queuetype = await getQueueByID(queuetype, None)
+                                queuetype = await getQueueByID(queuetype)
                                 if queuetype == "Arena": # DO ARENA THING HERE
                                     pass
                                 try:
@@ -833,12 +824,15 @@ class LolGames(commands.Cog):
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                     await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/euw/{gameID}", embed=embed))
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
-                                    await self.bot.cursor.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
-                                    await self.bot.db_conn.commit()
+                                    async with self.bot.pool.acquire() as conn:
+                                        async with conn.transaction():
+                                            await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                    return
                                 except:
                                     LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`")
-                                    await self.bot.cursor.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
-                                    await self.bot.db_conn.commit()
+                                    async with self.bot.pool.acquire() as conn:
+                                        async with conn.transaction():
+                                            await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
                                     continue
                             
                 except Exception as e:
@@ -882,16 +876,16 @@ class LolGames(commands.Cog):
             puuid = await get_puuid_by_name(ign, self.bot, region)
             if puuid is None:
                 return await ctx.send("Erreur lors de la récupération du puuid !")
-            await self.bot.cursor.execute("SELECT * FROM LoLGamesTracker WHERE puuid=?", (puuid,))
-            data = await self.bot.cursor.fetchall()
-            if len(data) == 0:
-                await self.bot.cursor.execute("INSERT INTO LoLGamesTracker (userId, ign, puuid, region) VALUES (?, ?, ?, ?)", (str(userId), ign, puuid, region))
-            else:
-                if any(puuid in n for n in data):
-                    return await ctx.send("Ce compte est déjà track !")
-                else:
-                    await self.bot.cursor.execute("INSERT INTO LoLGamesTracker (userId, ign, puuid, region) VALUES (?, ?, ?, ?)", (str(userId), ign, puuid, region))
-            await self.bot.db_conn.commit()
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    data = await conn.fetchall("SELECT * FROM LoLGamesTracker WHERE puuid=?", (puuid,))
+                    if len(data) == 0:
+                        await conn.execute("INSERT INTO LoLGamesTracker (userId, ign, puuid, region) VALUES (?, ?, ?, ?)", (str(userId), ign, puuid, region))
+                    else:
+                        if any(puuid in n for n in data):
+                            return await ctx.send("Ce compte est déjà track !")
+                        else:
+                            await conn.execute("INSERT INTO LoLGamesTracker (userId, ign, puuid, region) VALUES (?, ?, ?, ?)", (str(userId), ign, puuid, region))
             return await ctx.send(f"Le compte `{ign}` en région `{region}` au puuid `{puuid}` a été ajouté !")
 
     @commands.command()
@@ -901,22 +895,21 @@ class LolGames(commands.Cog):
         else:
             if ign is None:
                 return ctx.send("Utilise un pseudo !\nUtilise !loltracklist pour voir les pseudos trackés.")
-            await self.bot.cursor.execute("SELECT * FROM LoLGamesTracker WHERE ign=?", (ign,))
-            data = await self.bot.cursor.fetchall()
-            if len(data) == 0:
-                return await ctx.send("Ce compte n'est pas track !")
-            else:
-                await self.bot.cursor.execute("DELETE FROM LoLGamesTracker WHERE ign=?", (ign,))
-                await self.bot.db_conn.commit()
-                return await ctx.send(f"Le compte `{ign}` a été retiré !")
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    data = await conn.fetchall("SELECT * FROM LoLGamesTracker WHERE ign=?", (ign,))
+                    if len(data) == 0:
+                        return await ctx.send("Ce compte n'est pas track !")
+                    await conn.execute("DELETE FROM LoLGamesTracker WHERE ign=?", (ign,))
+            return await ctx.send(f"Le compte `{ign}` a été retiré !")
 
     @commands.command()
     async def loltracklist(self, ctx: commands.Context):
         if ctx.author.id != 311013099719360512:
             return
         else:
-            await self.bot.cursor.execute("SELECT * FROM LoLGamesTracker")
-            data = await self.bot.cursor.fetchall()
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT * FROM LoLGamesTracker")
             if len(data) == 0:
                 return await ctx.send("Aucun compte n'est track !")
             else:

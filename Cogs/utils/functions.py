@@ -12,14 +12,12 @@ if TYPE_CHECKING:
 
 class TrapardeurV2:
     """Gestion de la DB Trapardeur. DB Structure: `userId:str`, `vocalTime:int`, `messageSent:int`, `commandSent:int`"""
-    def __init__(self, conn: asqlite.Connection, cursor: asqlite.Cursor, userId:str=None, vocalTime:int=None, messageSent:int=None, commandSent:int=None):
+    def __init__(self, pool: asqlite.Pool, userId:str=None, vocalTime:int=None, messageSent:int=None, commandSent:int=None):
         self.userId = userId
         self.vocalTime = vocalTime
         self.messageSent = messageSent
         self.commandSent = commandSent
-        self.conn = conn
-        self.cursor = cursor
-
+        self.pool = pool
 
     async def add(self, userId:str, vocalTime:int=None, messageSent:int=None, commandSent:int=None):
         """Ajoute un utilisateur à la base de données. """
@@ -30,12 +28,16 @@ class TrapardeurV2:
         if commandSent is None:
             commandSent = 0
         user_data = (userId, vocalTime, messageSent, commandSent)
-        await self.cursor.execute("INSERT INTO Trapardeur (userId, vocalTime, messageSent, commandSent) VALUES (?, ?, ?, ?)", user_data)
-        await self.conn.commit()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO Trapardeur (userId, vocalTime, messageSent, commandSent) VALUES (?, ?, ?, ?)", user_data)
+        return
     
     async def delete(self):
-        await self.cursor.execute("DELETE FROM Trapardeur WHERE userId = ?", (self.userId,))
-        await self.conn.commit()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM Trapardeur WHERE userId = ?", (self.userId,))
+        return
 
     async def update(self, userId:str, vocalTime:int=None, messageSent:int=None, commandSent:int=None):
         prev = await self.get()
@@ -45,28 +47,32 @@ class TrapardeurV2:
             messageSent = prev[0][3]
         if commandSent is None:
             commandSent = prev[0][4]
-        await self.cursor.execute("UPDATE Trapardeur SET vocalTime = ?, messageSent = ?, commandSent = ? WHERE userId = ?", (vocalTime, messageSent, commandSent, userId))
-        await self.conn.commit()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("UPDATE Trapardeur SET vocalTime = ?, messageSent = ?, commandSent = ? WHERE userId = ?", (vocalTime, messageSent, commandSent, userId))
+        return
 
     async def get(self):
         """Renvoie les données de l'utilisateur. `data[0][2] = vocalTime`, `data[0][3] = messageSent`, `data[0][4] = commandSent`"""
-        await self.cursor.execute("SELECT * FROM Trapardeur WHERE userId = ?", (self.userId,))
-        rows = await self.cursor.fetchall()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetchall("SELECT * FROM Trapardeur WHERE userId = ?", (self.userId,))
         return rows
     
     async def get_all(self):
-        await self.cursor.execute("SELECT * FROM Trapardeur")
-        rows = await self.cursor.fetchall()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetchall("SELECT * FROM Trapardeur")
         return rows
     
-    async def is_in(self):
+    async def is_in(self) -> bool:
         """Renvoie True si l'utilisateur est dans la base de données, False sinon."""
-        await self.cursor.execute("SELECT * FROM Trapardeur WHERE userId = ?", (self.userId,))
-        rows = await self.cursor.fetchall()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetchall("SELECT * FROM Trapardeur WHERE userId = ?", (self.userId,))
         if len(rows) == 0:
             return False
-        else:
-            return True
+        return True
 
     def __str__(self):
         return f"userId: {self.userId}, vocalTime: {self.vocalTime}, messageSent: {self.messageSent}, commandSent: {self.commandSent}"
@@ -87,14 +93,14 @@ async def command_counter(user_id: str, bot, type:str=None):
         Increment the command counter for the user
     """
     if type is None:
-        handler = TrapardeurV2(conn=bot.db_conn, cursor=bot.cursor, userId=user_id)
+        handler = TrapardeurV2(pool=bot.pool, userId=user_id)
         if await handler.is_in():
             prev = await handler.get()
             await handler.update(userId=user_id, commandSent=prev[0][4]+1, messageSent=prev[0][3], vocalTime=prev[0][2])
         else:
             await handler.add(userId=user_id, commandSent=1, messageSent=0, vocalTime=0)
     else:
-        handler = TrapardeurV2(userId=user_id, conn=bot.db_conn, cursor=bot.cursor)
+        handler = TrapardeurV2(userId=user_id, pool=bot.pool)
         if await handler.is_in():
             prev = await handler.get()
             await handler.update(userId=user_id, messageSent=prev[0][3]+1, commandSent=prev[0][4], vocalTime=prev[0][2])

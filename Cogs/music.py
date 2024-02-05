@@ -11,8 +11,8 @@ from asyncio import sleep
 from bot import DB_PATH, MUSIC_LIST, PLAYLIST_LIST, Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, load_json_data, write_item, is_url
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER
-import traceback, json, re, datetime, random, os, asyncio, threading, base64
-from asqlite import Connection, Cursor
+import traceback, re, datetime, random, os, asyncio, threading, base64
+from asqlite import Pool
 
 def is_comma_separated(index_string):
     """Check if there is a `,` or `-` in given string, return True or False"""
@@ -46,7 +46,7 @@ def convert_to_minutes_seconds(music_len_sec: str, just_int:bool=False):
     except Exception as e:
         LogErrorInWebhook()
 
-def getMusicQueue(server_id, current, bot: Trapard, unique_downloader, music_list_handler):
+async def getMusicQueue(server_id, current, bot: Trapard, unique_downloader, music_list_handler):
 
     try:
         if server_id not in bot.music_queues:
@@ -72,18 +72,18 @@ def getMusicQueue(server_id, current, bot: Trapard, unique_downloader, music_lis
             if server_id in bot.current_track:
                 global current_song_time
                 track = bot.current_track[server_id]
-                index = music_list_handler.get_index_by_music_name2(track)
-                track_duration = music_list_handler.get_song_duration_by_index(index)
+                index = await music_list_handler.get_index_by_music_name2(track)
+                track_duration = await music_list_handler.get_song_duration_by_index(index)
                 pbar = create_progress_bar(current_song_time, int(track_duration))
-                dler = bot.unique_downloader_display_names[int(music_list_handler.get_index_by_music_name(str(track))[1])]
-                field = f"```🎵 {track}\nTéléchargé par: {dler}\nNuméro de piste: {convert_str_to_emojis(music_list_handler.get_index_by_music_name(str(track))[0])}\nProgression: [{pbar}] - {convert_int_to_emojis(current_song_time)}/{convert_str_to_emojis(str(track_duration))}s```"
+                dler = bot.unique_downloader_display_names[int(await music_list_handler.get_index_by_music_name(str(track))[1])]
+                field = f"```🎵 {track}\nTéléchargé par: {dler}\nNuméro de piste: {convert_str_to_emojis(await music_list_handler.get_index_by_music_name(str(track))[0])}\nProgression: [{pbar}] - {convert_int_to_emojis(current_song_time)}/{convert_str_to_emojis(str(track_duration))}s```"
                 embed.add_field(name='- Musique actuel:', value=field, inline=False)
             start_index = page * queue_limit
             end_index = min(start_index + queue_limit, len(queue))
             for i in range(start_index, end_index):
                 try:
                     try:
-                        index1, dler  = music_list_handler.get_index_by_music_name(str(queue[i]))
+                        index1, dler  = await music_list_handler.get_index_by_music_name(str(queue[i]))
                         dler = bot.unique_downloader_display_names[int(dler)]
                     except:
                         index1 = "?"
@@ -240,50 +240,48 @@ def getVideoId(title):
     except Exception as e:
         LogErrorInWebhook()
 
-async def storeSkippedSong(conn: Connection, c: Cursor, songname: str, userid:str):
+async def storeSkippedSong(pool: Pool, songname: str, userid:str):
     """Store the skipped song in the database."""
     try:
-        await c.execute("SELECT * FROM SkippedSongs WHERE songName = ? AND userId = ?", (songname, userid))
-        data = await c.fetchone()
-        if data is None:
-            await c.execute("INSERT INTO SkippedSongs (songName, userId, count) VALUES (?, ?, 1)", (songname, userid))
-            await conn.commit()
-            return True
-        else:
-            await c.execute("UPDATE SkippedSongs SET count = ? WHERE songName = ? AND userId = ?", (data[3] + 1, songname, userid))
-            await conn.commit()
-            return True
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                data = await conn.fetchone("SELECT * FROM SkippedSongs WHERE songName = ? AND userId = ?", (songname, userid))
+                if data is None:
+                    await conn.execute("INSERT INTO SkippedSongs (songName, userId, count) VALUES (?, ?, 1)", (songname, userid))
+                    return True
+                else:
+                    await conn.execute("UPDATE SkippedSongs SET count = ? WHERE songName = ? AND userId = ?", (data[3] + 1, songname, userid))
+                    return True
     except Exception as e:
         LogErrorInWebhook()
 
-async def FavSongsDbHandler(conn: Connection, c: Cursor, song_name, user_id):
+async def FavSongsDbHandler(pool: Pool, song_name, user_id):
     """Count the number of time a song is played by a user and add it to the db."""
     try:
-        if song_name:
-            # try get userid and song name from db
-            await c.execute("SELECT * FROM FavSongs WHERE songName = ? AND userId = ?", (song_name, user_id))
-            data = await c.fetchone()
-            if data is None:
-                await c.execute("INSERT INTO FavSongs (songName, userId, count) VALUES (?, ?, 1)", (song_name, user_id))
-                await conn.commit()
-                return True
-            else:
-                await c.execute("UPDATE FavSongs SET count = ? WHERE songName = ? AND userId = ?", (data[3] + 1, song_name, user_id))
-                await conn.commit()
-                return True
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                if song_name:
+                    # try get userid and song name from db
+                    data = await conn.fetchone("SELECT * FROM FavSongs WHERE songName = ? AND userId = ?", (song_name, user_id))
+                    if data is None:
+                        await conn.execute("INSERT INTO FavSongs (songName, userId, count) VALUES (?, ?, 1)", (song_name, user_id))
+                        return True
+                    else:
+                        await conn.execute("UPDATE FavSongs SET count = ? WHERE songName = ? AND userId = ?", (data[3] + 1, song_name, user_id))
+                        return True
     except Exception as e:
         LogErrorInWebhook()
 
-async def IncrementMusicPlayed(TrackName, conn: Connection, cursor: Cursor):
+async def IncrementMusicPlayed(TrackName, pool: Pool):
     """Increment the number of times a song has been played"""
     try:
-        await cursor.execute("SELECT * FROM SongPlayedCount WHERE songName=?", (TrackName,))
-        data = await cursor.fetchone()
-        if data is None:
-            await cursor.execute("INSERT INTO SongPlayedCount (songName, count) VALUES (?, ?)", (TrackName, 1))
-        else:
-            await cursor.execute("UPDATE SongPlayedCount SET count=? WHERE songName=?", (data[2] + 1, TrackName))
-        await conn.commit()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                data = await conn.fetchone("SELECT * FROM SongPlayedCount WHERE songName=?", (TrackName,))
+                if data is None:
+                    await conn.execute("INSERT INTO SongPlayedCount (songName, count) VALUES (?, ?)", (TrackName, 1))
+                else:
+                    await conn.execute("UPDATE SongPlayedCount SET count=? WHERE songName=?", (data[2] + 1, TrackName))
     except Exception as e:
         LogErrorInWebhook()
 
@@ -377,161 +375,160 @@ class get_artist_from_title():
 
 class MusicList_Handler():
     """
-    Class pour controler le fichier  music_list.json
+    Class pour controler la db musiques
     """
-    def __init__(self,bot: Trapard):
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
+    def __init__(self, bot: Trapard):
         self.bot = bot
 
-    def getAllMusicPath(self):
+    async def getAllMusicPath(self):
         """
         return path of all music
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        path = []
-        for key, val in self.data.items():
-            path.append(val[0])
-        return path
+        out = []
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT name FROM musiques")
+            for d in data:
+                out.append(d[0])
+        return out
 
-    def remove_from_music_list(self, index: str):
+    async def get_musique_size(self):
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall('SELECT * FROM musiques')
+        return len(data)
+
+    async def remove_from_music_list(self, index: str):
         """
-        remove a song from mlist by index
+        Remove a song from mlist by index
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        if index in self.data:
-            del self.data[index]
-            updated_data = {}
-            for key, value in self.data.items():
-                if int(key) > int(index):
-                    updated_data[str(int(key) - 1)] = value
-                else:
-                    updated_data[key] = value
-            with open(MUSIC_LIST, "w", encoding="utf-8") as f:
-                json.dump(updated_data, f, ensure_ascii=False, indent=4)
-            return
-    
-    def get_all_music_name(self):
+        name = await self.getName(index)
+        
+        async with self.bot.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM musiques WHERE name=? AND pos=?", (name, index))
+                
+                # Obtenez la taille de la liste une seule fois
+                musique_size = await self.get_musique_size()
+                
+                for i in range(int(index) + 1, musique_size+10):
+                    await conn.execute("UPDATE musiques SET pos = ? WHERE pos = ?", (i - 1, i))
+        return
+
+    async def get_all_music_name(self):
         """Return all music name in a dict where `key is music` name and `value is index`"""
         try:
-            with open(MUSIC_LIST, "r") as f:
-                data = json.load(f)
-            liste = {}
-            for key, val in data.items():
-                liste[val[0]] = key
-            return liste
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT name, pos FROM musiques")
+            out = {}
+            for item in data:
+                out[item[0]] = item[1]
+            return out
         except Exception as e:
             LogErrorInWebhook()
 
-    def get_index_by_music_name(self, name: str):
+    async def get_index_by_music_name(self, name: str):
         """
         return index, user_downloader of song by music_name
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            data = json.loads(f.read())
-        for key, val in data.items():
-            if val[0] == name:
-                return str(key), str(val[2])
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT pos, downloader FROM musiques WHERE name = ?", name)
+        return str(data[0]), str(data[1])
 
-    def get_index_by_music_name2(self, name: str):
+    async def get_index_by_music_name2(self, name: str):
         """
         return index of song by music_name
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        for key, val in self.data.items():
-            if val[0] == name:
-                return str(key)
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT pos FROM musiques WHERE name = ?", name)
+            if data:
+                return str(data[0])
+            else: return None
 
-    def find_song_by_name(self, name: str):
+    async def find_song_by_name(self, name: str):
 
         """
         return list of music name, index by a part name
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
         t = f"Les trouvailles pour la recherche `{name}`:\n\n"
-        found = []
-        for key, val in self.data.items():
-            if name.lower() in str(val[0]).lower():
-                t += f'`{val[0]}` **N°{key}**\n'
-                found.append(key)
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT name, pos FROM musiques")
+            found = []
+            for item in data:
+                if name.lower() in str(item[0]).lower():
+                    t += f'`{item[0]}` **N°{item[1]}**\n'
+                    found.append(item[0])
         if t == f"Les trouvailles pour la recherche `{name}`:\n\n":
             return f"Aucune musique portant ou contenant le texte {name} n'a été trouvée.😭", found
-        else:
-            return t, found
-        
-    def Get_Total_Musics_Len(self):
+        return t, found
+
+    async def Get_Total_Musics_Len(self):
         """
         return string of total time of the music list
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT duree FROM musiques")
         total_seconds = 0
-        for key, val in self.data.items():
-            total_seconds += int(val[1])
+        for item in data:
+            total_seconds += int(item[0])
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
         duration_str = f"{hours}h {minutes:02d}m {seconds:02d}s"
         return duration_str
 
-    def get_next_index(self):
+    async def get_next_index(self):
         """
         return the next index that should be in mlist.
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        return int(list(self.data.keys())[-1]) + 1
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT pos FROM musiques ORDER BY id DESC LIMIT 1")
+        return int(data[0]) + 1
 
-    def add_music_to_list(self, new_music: list):
+    async def add_music_to_list(self, new_music: list):
         """
-        add music to music list file
+        add music to db.
             ``new_music`` = ["music_name", 120, 267439803786723329, "artist"]
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        next_index = self.get_next_index()
-        self.data[str(next_index)] = new_music
-        
-        with open(MUSIC_LIST, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=4)
+        next_index = await self.get_next_index()
+        async with self.bot.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO musiques (name, pos, duree, downloader, artiste) VALUES (?,?,?,?,?)", (new_music[0], next_index, new_music[1],new_music[2],new_music[3]))
+        return
 
-    def getName(self, index: str):
+    async def getName(self, index: str):
         """return song name by index"""
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        for key, val in self.data.items():
-            if index == key:
-                return str(val[0])
-            
-    def get_song_duration_by_index(self, index:str):
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT name FROM musiques WHERE pos = ?", int(index))
+        if data:
+            return data[0]
+        return "Unknown index."
+
+    async def get_song_duration_by_index(self, index:str):
         """return int(song) duration by index"""
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT duree FROM musiques WHERE pos = ?", int(index))
+        if data:
+            return int(data[0])
+        else:
+            return "Unknown index."
 
-        for key, val in self.data.items():
-            if key == index:
-                return int(val[1])
-
-    def get_unique_downloader(self):
+    async def get_unique_downloader(self):
         """
         return list of unique userid music downloader.
         """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        uniques_id = []
-        for _, val in self.data.items():
-            if int(val[2]) > 10000000:
-                uniques_id.append(val[2])
-        return set(uniques_id)
+        async with self.bot.pool.acquire() as conn:
+            downloaders = await conn.fetchall("SELECT DISTINCT downloader FROM musiques")
+        out = []
+        for downloader in downloaders:
+            out.append(downloader[0])
+        return set(out)
 
-    def get_all_index_in_playlists(self):
+    async def get_all_index_in_playlists(self):
         """
             return list of index that are in a created playlist.
         """
+
+
+
         with open(PLAYLIST_LIST, "r", encoding="utf-8") as f:
             lines = f.readlines()
             data = []
@@ -539,31 +536,19 @@ class MusicList_Handler():
                 _, musiques = line.split("=", maxsplit=1)
                 musiques_list = musiques.split(',')
                 for musique in musiques_list:
-                    data.append(self.get_index_by_music_name2(musique))
+                    data.append(await self.get_index_by_music_name2(musique))
         return data
-
-    def edit_artist(self, index: str, new_artist: str):
-        """
-        edit artist of a song by index
-        """
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
-        print("new artist: ", new_artist)
-        for key, val in self.data.items():
-            if index == key:
-                val[3] = new_artist
-                self.data[key] = val
-                with open(MUSIC_LIST, "w", encoding="utf-8") as f:
-                    json.dump(self.data, f, ensure_ascii=False, indent=4)
-                    print("writed")
-                return True
-        print("not writed")
-        return False
 
     async def getMList(self, userid:int=None):
         """return int(song) duration by index"""
-        with open(MUSIC_LIST, "r", encoding="utf-8") as f:
-            self.data = json.loads(f.read())
+
+        async with self.bot.pool.acquire() as conn:
+            out = await conn.fetchall("SELECT name, duree, downloader, artiste, pos FROM musiques")
+
+        self.data = {}
+        for musique in out:
+            name, duree, downloader, artiste, pos = musique
+            self.data[str(pos)] = [name, duree, downloader, artiste]
         output = []
         page_limit = 25  # Nombre d'éléments par page
         total_pages = (len(self.data) + page_limit - 1) // page_limit  # Calcul du nombre total de pages
@@ -594,7 +579,7 @@ class MusicList_Handler():
         if userid is None:
             for page in range(total_pages):
                 embed = discord.Embed(title=f"Liste des musiques")
-                embed.add_field(name="", value=f"- téléchargées par Tous ({self.Get_Total_Musics_Len()}) - Page {page+1}/{total_pages}", inline=False)
+                embed.add_field(name="", value=f"- téléchargées par Tous ({await self.Get_Total_Musics_Len()}) - Page {page+1}/{total_pages}", inline=False)
                 field = "```" + printFormat("N°", 4) + "|" + printFormat("Nom", 30) + "|" + printFormat("Artiste", 14) + "|" + printFormat("Durée", 6) + "|" + printFormat("Téléchargé par", 12) +"\n\n"
                 field += '-' * 4 +  "|" + '-' * 33 + '|' + '-' * 6 + '|' + '-' * 11 + "\n"
 
@@ -750,21 +735,10 @@ async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_
         duration = video.length
         file_name = rename(video.title)
 
-        def all_music_name():
-            with open(MUSIC_LIST) as f:
-                data = json.load(f)
-            
-            music_names = []
-            for key in data:
-                music_info = data[key]
-                music_name = str(music_info[0]) + ".mp3"
-                music_names.append(music_name)
-            
-            return music_names
         formatMention = "<@" + str(userid) + ">"
-        if file_name in all_music_name():
+        if file_name in await music_list_handler.get_all_music_name():
             name = file_name.replace(".mp3", "")
-            index, dler = music_list_handler.get_index_by_music_name(name=name)
+            index, dler = await music_list_handler.get_index_by_music_name(name=name)
             embed = create_embed(title="Erreur", description=f"- {formatMention}, il semble que la musique `{name}` ({convert_str_to_emojis(f'n {index}')}), ait déjà été téléchargée.\n\n- Le téléchargement a été annulé.")
             if ctx is not None:
                 await ctx.send(embed=embed)
@@ -804,7 +778,7 @@ async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_
 
         # Wait for the thread to finish
         thread.join()
-        index = music_list_handler.get_next_index()
+        index = await music_list_handler.get_next_index()
         # Check if there was an exception in the thread
         if thread.is_alive():
             # The thread is still running, which means there was an exception
@@ -839,7 +813,7 @@ async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_
             music_artist = get_artist_from_title(title=video.title).artists[0]
             print(music_artist, "artist")
         file_name = str(file_name).split(".")[0]
-        music_list_handler.add_music_to_list([str(file_name), int(duration), int(userid), str(music_artist)])
+        await music_list_handler.add_music_to_list([str(file_name), int(duration), int(userid), str(music_artist)])
         return True
     except Exception as e:
         LogErrorInWebhook()
@@ -983,14 +957,14 @@ class MusicController():
                 global current_song_time                
                 current_song_time = 0
                 time_old = 0
-                messages = getMusicQueue(server_id=server_id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(server_id=server_id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
                 guild = self.bot.get_guild(server_id)
                 zic_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text)
                 if zic_chann is None:
                     return
                 track = self.bot.current_track[server_id]
-                index = self.music_list_handler.get_index_by_music_name(track)
+                index = await self.music_list_handler.get_index_by_music_name(track)
                 try:
                     dler = self.bot.unique_downloader_display_names[(int(index[1]))]
                 except:
@@ -1001,7 +975,7 @@ class MusicController():
                     except:
                         dler = "Inconnu2"
 
-                track_duration = self.music_list_handler.get_song_duration_by_index(str(index[0]))
+                track_duration = await self.music_list_handler.get_song_duration_by_index(str(index[0]))
                 pbar = create_progress_bar(current_song_time, int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(str(current_song_time)) + " /" + convert_to_minutes_seconds(str(track_duration))
                 embed = create_embed(title=f"Musique actuelle 🎝 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\n- Téléchargé par **{dler}**\n\n- `{pbar}`\n\n- `                 {convert_str_to_emojis(dur)}`")
@@ -1082,7 +1056,7 @@ class MusicController():
                     duration = data['time'] + current_song_time
                     num = data['number-played'] + 1
                     write_item(item="song-stats",values={"time": duration, "number-played": num})
-                    await IncrementMusicPlayed(TrackName=track, conn=self.bot.db_conn, cursor=self.bot.cursor)
+                    await IncrementMusicPlayed(TrackName=track, pool=self.bot.pool)
             except Exception as e:
                 LogErrorInWebhook()
 
@@ -1156,7 +1130,7 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
         #     pass
         self.user_input = self.feedback.value
         em_error = create_embed(title="Erreur", description="- Le numéro que tu as donné n'est pas bon !!\n\n- Voila comment utiliser `/play`\n\n- `/play 5`\n\n- `/play 12,3,5,25,25,3,1`", suggestions=["queue","mlist","playlist-play"])
-        messages = getMusicQueue(interaction.guild.id, None, unique_downloader=self.music_controler.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+        messages = await getMusicQueue(interaction.guild.id, None, unique_downloader=self.music_controler.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
         view = PlayAllView(messages, interaction.guild.id, interaction, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.music_controler.unique_downloader)
         print("oui", self.custom_id)
         if is_comma_separated(self.user_input) is True:
@@ -1166,11 +1140,11 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
                 return await interaction.send(embed=em_error)
             out = []
             for i in wantedList:
-                out.append(self.music_list_handler.getName(str(i)))
+                out.append(await self.music_list_handler.getName(str(i)))
             music_name = "Queue"
         else:
             try:
-                music_name = self.music_list_handler.getName(str(self.user_input))
+                music_name = await self.music_list_handler.getName(str(self.user_input))
             except ValueError:
                 return await interaction.send(embed=em_error)
             if music_name == "Song not found.":
@@ -1275,10 +1249,10 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
             try: await interaction.response.defer()
             except: pass
             if button.custom_id == "afficher_queue":
-                messages = getMusicQueue(self.serverid, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(self.serverid, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
                 queue_view = QueueBtn(messages, len(messages), ctx=self.ctx)
                 await interaction.channel.send(embed=messages[0], view=queue_view)
-                messages = getMusicQueue(interaction.guild_id, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(interaction.guild_id, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(messages, interaction.guild_id, interaction, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
                 await interaction.channel.send(view=view)
             # elif button.custom_id == "mlist":
@@ -1293,7 +1267,7 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
                     mu = ""
                 # Stop the current player and move to the next one
                 vc.stop()
-                await storeSkippedSong(self.bot.db_conn, self.bot.cursor, mu, str(interaction.user.id))
+                await storeSkippedSong(pool=self.bot.pool, songname=mu, userid=str(interaction.user.id))
                 embed = create_embed(title="Musique", description=f"La musique `{mu}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
                 return await interaction.followup.send(embed=embed)
             elif button.custom_id == "disconnect":
@@ -1372,8 +1346,8 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                 return await ctx.send(embed=embed, ephemeral=True)
             user_vocal = ctx.author.voice.channel
             server_id = ctx.guild.id
-            musicList = music_list_handler.getAllMusicPath()
-            total_musics_len = music_list_handler.Get_Total_Musics_Len()
+            musicList = await music_list_handler.getAllMusicPath()
+            total_musics_len = await music_list_handler.Get_Total_Musics_Len()
             
             added_musics_len = 0
 
@@ -1382,17 +1356,17 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                 if shuffle is False:
                     for music in musicList:
                         if include is not None:
-                            ___, dler = music_list_handler.get_index_by_music_name(music)
+                            ___, dler = await music_list_handler.get_index_by_music_name(music)
                             if int(dler) in include:
                                 continue
                         if exclude is not None:
-                            ___, dler = music_list_handler.get_index_by_music_name(music)
+                            ___, dler = await music_list_handler.get_index_by_music_name(music)
                             if int(dler) in exclude:
                                 continue
                         await music_controler.add_to_queue(server_id, music)
                         added_musics_len += 1
                     t = len(musicList)
-                    messages = getMusicQueue(server_id, None)
+                    messages = await getMusicQueue(server_id, None)
                     view = PlayAllView(messages, server_id, ctx)
                     embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
                     return await ctx.send(embed=embed, view=view)
@@ -1400,19 +1374,19 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                     shuffle(musicList)
                     for music in musicList:
                         if include is not None:
-                            ___, dler = music_list_handler.get_index_by_music_name(music)
+                            ___, dler = await music_list_handler.get_index_by_music_name(music)
                             print("downloader : ", dler)
                             if int(dler) in include:
                                 continue
                         if exclude is not None:
-                            ___, dler = music_list_handler.get_index_by_music_name(music)
+                            ___, dler = await music_list_handler.get_index_by_music_name(music)
                             print("downloader : ", dler)
                             if int(dler) in exclude:
                                 continue
                         await music_controler.add_to_queue(server_id, music)
                         added_musics_len += 1
                     t = len(musicList)
-                    messages = getMusicQueue(server_id, None)
+                    messages = await getMusicQueue(server_id, None)
                     view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
                     embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue aléatoirement ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
                     return await ctx.send(embed=embed, view=view)
@@ -1424,18 +1398,18 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                     if shuffle is False:
                         for music in musicList:
                             if include is not None:
-                                ___, dler = music_list_handler.get_index_by_music_name(music)
+                                ___, dler = await music_list_handler.get_index_by_music_name(music)
                                 if int(dler) not in include:
                                     continue
                             if exclude is not None:
-                                ___, dler = music_list_handler.get_index_by_music_name(music)
+                                ___, dler = await music_list_handler.get_index_by_music_name(music)
                                 if int(dler) in exclude:
                                     continue
                             await music_controler.add_to_queue(server_id, music)
                             added_musics_len += 1
                         t = len(musicList)
                         await music_controler.play_music(server_id, vc=vc)
-                        messages = getMusicQueue(server_id, None)
+                        messages = await getMusicQueue(server_id, None)
                         view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
                         embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
                         return await ctx.send(embed=embed, view=view)
@@ -1445,11 +1419,11 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                         print(2)
                         for music in musicList:
                             if include is not None:
-                                ___, dler = music_list_handler.get_index_by_music_name(music)
+                                ___, dler = await music_list_handler.get_index_by_music_name(music)
                                 if int(dler) not in include:
                                     continue
                             if exclude is not None:
-                                ___, dler = music_list_handler.get_index_by_music_name(music)
+                                ___, dler = await music_list_handler.get_index_by_music_name(music)
                                 if int(dler) in exclude:
                                     print("downloader EXCLUDED : ", dler)
                                     continue
@@ -1462,7 +1436,7 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                         print(33)
                         current = musicList[0]
                         print(333)
-                        messages = getMusicQueue(server_id=server_id, current=current, bot=bot, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
+                        messages = await getMusicQueue(server_id=server_id, current=current, bot=bot, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
                         print(4)
                         view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
                         embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue aléatoirement ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
@@ -1703,7 +1677,7 @@ class Music(commands.Cog):
                 embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
                 return await ctx.send(embed=embed)
 
-            messages = getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
 
             user_vocal = ctx.author.voice.channel
@@ -1715,7 +1689,7 @@ class Music(commands.Cog):
                     return await ctx.send(embed=em_error)
                 for i in wantedList:
                     if i is not None:
-                        out.append(self.music_list_handler.getName(str(i)))
+                        out.append(await self.music_list_handler.getName(str(i)))
                 music_name = "Queue"
             else: # pas de virgule
                 if "*" in index:
@@ -1724,11 +1698,11 @@ class Music(commands.Cog):
                     valeur = int(index.split('*')[1])
                     tmp.extend([str(valeur)] * multiplicateur)
                     for t in tmp:
-                        out.append(self.music_list_handler.getName(str(t)))
+                        out.append(await self.music_list_handler.getName(str(t)))
                 else:
-                    out.append(self.music_list_handler.getName(index))
+                    out.append(await self.music_list_handler.getName(index))
                     try:
-                        music_name = self.music_list_handler.getName(str(index))
+                        music_name = await self.music_list_handler.getName(str(index))
                     except ValueError:
                         return await ctx.send(embed=embed)
                     if music_name == "Song not found.":
@@ -1736,7 +1710,7 @@ class Music(commands.Cog):
             print("play Songs Name liste (out) = ", out)
             
             for songName in out:
-                await FavSongsDbHandler(self.bot.db_conn, self.bot.cursor, songName, str(ctx.author.id))
+                await FavSongsDbHandler(pool=self.bot.pool, song_name=songName, user_id=str(ctx.author.id))
 
             if ctx.guild.id in self.music_controler.voice_clients:
                 vc = self.music_controler.voice_clients[ctx.guild.id]
@@ -1768,7 +1742,7 @@ class Music(commands.Cog):
     async def autocomplete_musique_name(self,ctx: discord.Interaction, musique_name: str):
         try:
             liste = []
-            for key, val in self.music_list_handler.get_all_music_name().items():
+            for key, val in await self.music_list_handler.get_all_music_name().items():
                 if musique_name.lower() in key.lower():
                     liste.append(app_commands.Choice(name=f"{key} ({val})", value=val))
                 if len(liste) == 25:
@@ -1844,7 +1818,7 @@ class Music(commands.Cog):
                 embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
                 return await ctx.send(embed=embed)
 
-            messages = getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
+            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
 
             out = []
@@ -1855,7 +1829,7 @@ class Music(commands.Cog):
                     return await ctx.send(embed=em_error)
                 for i in wantedList:
                     if i is not None:
-                        out.append(self.music_list_handler.getName(str(i)))
+                        out.append(await self.music_list_handler.getName(str(i)))
                 music_name = "Queue"
             else: # pas de virgule
                 if "*" in index:
@@ -1864,11 +1838,11 @@ class Music(commands.Cog):
                     valeur = int(index.split('*')[1])
                     tmp.extend([str(valeur)] * multiplicateur)
                     for t in tmp:
-                        out.append(self.music_list_handler.getName(str(t)))
+                        out.append(await self.music_list_handler.getName(str(t)))
                 else:
-                    out.append(self.music_list_handler.getName(index))
+                    out.append(await self.music_list_handler.getName(index))
                     try:
-                        music_name = self.music_list_handler.getName(str(index))
+                        music_name = await self.music_list_handler.getName(str(index))
                     except ValueError:
                         return await ctx.send(embed=embed)
                     if music_name == "Song not found.":
@@ -1877,7 +1851,7 @@ class Music(commands.Cog):
             print("play-next Songs Name liste (out) = ", out)
 
             for songName in out:
-                await FavSongsDbHandler(conn=self.bot.db_conn, c=self.bot.cursor, song_name=songName, user_id=str(ctx.author.id))
+                await FavSongsDbHandler(pool=self.bot.pool, song_name=songName, user_id=str(ctx.author.id))
 
             if ctx.guild.id in self.music_controler.voice_clients:
                 vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
@@ -1904,7 +1878,7 @@ class Music(commands.Cog):
     async def autocomplete_musique_name(self, ctx: discord.Interaction, musique_name: str):
         try:
             liste = []
-            for key, val in self.music_list_handler.get_all_music_name().items():
+            for key, val in await self.music_list_handler.get_all_music_name().items():
                 if musique_name.lower() in key.lower():
                     liste.append(app_commands.Choice(name=f"{key} ({val})", value=val))
                 if len(liste) == 25:
@@ -1940,27 +1914,31 @@ class Music(commands.Cog):
     @commands.hybrid_command() #old: /mlist
     async def mlist(self, interaction: commands.Context):
         """Affiche la liste de toutes les musiques."""
-        await command_counter(user_id=str(interaction.author.id), bot=self.bot)
-        print(len(self.unique_downloader), self.unique_downloader)
-        options = [discord.SelectOption(label="Tous", value=f"tous", default=True, emoji="🦈")]
-        for unique in self.unique_downloader:
-            user = self.bot.get_user(int(unique))
-            if user:
-                name = user.display_name
-                options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
-        else:
-            drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot, music_controler=self.music_controler)
-            mlist = await self.music_list_handler.getMList()
-            view = QueueBtn(mlist, len(mlist), interaction)
-            view.add_item(drop)
-            await interaction.send(embed=mlist[0], view=view)
+        try:
+            await command_counter(user_id=str(interaction.author.id), bot=self.bot)
+            print(len(self.unique_downloader), self.unique_downloader)
+            options = [discord.SelectOption(label="Tous", value=f"tous", default=True, emoji="🦈")]
+            for unique in self.unique_downloader:
+                user = self.bot.get_user(int(unique))
+                if user:
+                    name = user.display_name
+                    options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
+            else:
+                drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot, music_controler=self.music_controler)
+                mlist = await self.music_list_handler.getMList()
+                view = QueueBtn(mlist, len(mlist), interaction)
+                view.add_item(drop)
+                await interaction.send(embed=mlist[0], view=view)
+        except:
+            LogErrorInWebhook()
 
-    @commands.hybrid_group(name='download', aliases=['search']) #old: /search and /download
+    @commands.hybrid_command(name='download', aliases=['search']) #old: /search and /download
     @app_commands.describe(keysearch = "Url Youtube ou texte de recherche.")
-    async def download(self, interaction: commands.Context, *, keysearch: Union[Url,str]):
+    async def download(self, interaction: commands.Context, *, keysearch: str):
         """Télécharger une musique, par url Youtube, ou par texte de recherche."""
         try:
             await command_counter(user_id=str(interaction.author.id), bot=self.bot)
+            # keysearch = ' '.join(keysearch)
             if interaction.channel.name != "musique":
                 return await interaction.send("Merci d'utiliser le channel <#896275056089530380> **BUICON**", ephemeral=True)
             if is_url(keysearch):
@@ -2027,13 +2005,14 @@ class Music(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
+
 # Music controler
     @commands.hybrid_command(name='skip', aliases=["next"]) # old: /skip
     async def skip(self, ctx: commands.Context):
         """Passer la musique actuelle."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            messages = getMusicQueue(ctx.guild.id, None)
+            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
             if ctx.channel.name != "musique":
                 embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
@@ -2043,7 +2022,7 @@ class Music(commands.Cog):
                 return await ctx.send("Trapard est dans aucun vocal, tu es one head ou quoi ?", ephemeral=True)
             cur_track = self.bot.current_track[ctx.guild.id]
             vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
-            storeSkippedSong(cur_track, str(ctx.author.id))
+            await storeSkippedSong(pool=self.bot.pool, songname=cur_track, userid=str(ctx.author.id))
             # Stop the current player and move to the next one
             vc.stop()
             embed = create_embed(title="Musique", description=f"La musique `{cur_track}` a été passé par <@{ctx.author.id}>.")
@@ -2080,19 +2059,19 @@ class Music(commands.Cog):
     async def remove(self, ctx: commands.Context, index: int):
         """Enlever une musique de la liste."""
         try:
-            await command_counter(user_id=str(ctx.author.id))
-            playlist_indexs = self.music_list_handler.get_all_index_in_playlists()
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            playlist_indexs = await self.music_list_handler.get_all_index_in_playlists()
             if str(index) in playlist_indexs:
                 # La musique existe dans une playlist.
                 embed = create_embed(title="Suppression", description=f"<@{ctx.author.id}>\n- La musique {index} est présente dans une playlist !\n\n- Merci de l'enlever avec </playlist-modify:1115881059352068176> avant.")
                 return await ctx.send(embed=embed)
-            music_name = self.music_list_handler.getName(str(index))
+            music_name = await self.music_list_handler.getName(str(index))
             path = MUSICS_FOLDER + music_name + ".mp3"
             try:
                 os.remove(path)
             except FileNotFoundError:
                 pass
-            self.music_list_handler.remove_from_music_list(str(index))
+            await self.music_list_handler.remove_from_music_list(str(index))
             embed = create_embed(title="Suppression", description=f"Musique `{music_name}` supprimée !", suggestions=["queue","mlist","playlist-play"])
             return await ctx.send(embed=embed)
         except Exception as e:
@@ -2111,7 +2090,7 @@ class Music(commands.Cog):
                 return await interaction.send("Merci d'entrer minimum 3 caractères pour effectuer la recherche.", ephemeral=True)
             if ' ' in nom:
                 nom = nom.replace(' ', '')
-            result, found = self.music_list_handler.find_song_by_name(nom)
+            result, found = await self.music_list_handler.find_song_by_name(nom)
             if len(found) <= 5:
                 if len(found) == 1:
                     suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index=found[0], bot=self.bot)
@@ -2145,7 +2124,7 @@ class Music(commands.Cog):
                         return await ctx.send(embed=em_error)
                     out = []
                     for i in wantedList:
-                        out.append(self.music_list_handler.getName(str(i)))
+                        out.append(await self.music_list_handler.getName(str(i)))
 
                     allSong = ''
                     for i in out:
@@ -2180,11 +2159,11 @@ class Music(commands.Cog):
                         if playlist_text is not None and playlist_text != "" and playlist_text != "\n":
                             if pos != len(musics_list_str):
                                 try:
-                                    playlist_text_name += f"`{playlist_text}` **({self.music_list_handler.get_index_by_music_name2(playlist_text)})**, "
+                                    playlist_text_name += f"`{playlist_text}` **({await self.music_list_handler.get_index_by_music_name2(playlist_text)})**, "
                                 except TypeError:
                                     pass
                             else: 
-                                playlist_text_name += f"`{playlist_text}` **({self.music_list_handler.get_index_by_music_name2(playlist_text)})**"
+                                playlist_text_name += f"`{playlist_text}` **({await self.music_list_handler.get_index_by_music_name2(playlist_text)})**"
                                 break
                 else:
                     playlist_text_name = "Aucune musique dans la playlist."
@@ -2226,7 +2205,7 @@ class Music(commands.Cog):
             else:
                 shuffle = False
                 embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue dans l'ordre !")
-            messages = getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
+            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
             if ctx.author.voice is None: # Si le user nest dans aucun voocal
                 await ctx.send("Vous n'êtes pas dans un channel vocal, **BUICON**.", ephemeral=True)
@@ -2334,7 +2313,7 @@ class Music(commands.Cog):
             file_music_index = [] # File playlist music index list 
             for i, musique in  enumerate(musiques_list):
                 musique = musique.strip()
-                val = str(self.music_list_handler.get_index_by_music_name2(musique))
+                val = str(await self.music_list_handler.get_index_by_music_name2(musique))
                 if val is not None and val != "None":
                     file_music_index.append(val)
 
@@ -2344,7 +2323,7 @@ class Music(commands.Cog):
                 index_list = indexes.split(",") # User input list
                 user_playlist_music_name_list = [] # User input music name list
                 for index in index_list:
-                    user_playlist_music_name_list.append(self.music_list_handler.getName(str(index)))
+                    user_playlist_music_name_list.append(await self.music_list_handler.getName(str(index)))
                 output_text += "Les musiques "
                 if action_type == "add":
                     for user_index_input in index_list: # Ajouter les music à la playliste
@@ -2357,10 +2336,10 @@ class Music(commands.Cog):
                     nouvelle_ligne = f"{playlistname}="
                     for pos, n in enumerate(file_music_index):
                         if pos != len(file_music_index) - 1:
-                            n_name = self.music_list_handler.getName(str(n))
+                            n_name = await self.music_list_handler.getName(str(n))
                             nouvelle_ligne += f'{n_name},'
                         else:
-                            n_name = self.music_list_handler.getName(str(n))
+                            n_name = await self.music_list_handler.getName(str(n))
                             nouvelle_ligne += f'{n_name}'
 
                     for pos, val in enumerate(user_playlist_music_name_list):
@@ -2376,15 +2355,15 @@ class Music(commands.Cog):
                             if user_index_input != "None" and user_index_input is not None:
                                 file_music_index.remove(user_index_input)
                             else: embed = create_embed(title="Playlist-modify", description=f"Une erreur est survenue. Tu es sur d'avoir entré les bons numéros ? :\n```{index_list}```")
-                        else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** n'existe pas dans la playlist !") 
+                        else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{await self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** n'existe pas dans la playlist !") 
 
                     nouvelle_ligne = f"{playlistname}="
                     for pos, n in enumerate(file_music_index):
                         if pos != len(file_music_index) - 1:
-                            n_name = self.music_list_handler.getName(str(n))
+                            n_name = await self.music_list_handler.getName(str(n))
                             nouvelle_ligne += f'{n_name},'
                         else:
-                            n_name = self.music_list_handler.getName(str(n))
+                            n_name = await self.music_list_handler.getName(str(n))
                             nouvelle_ligne += f'{n_name}'
                     for pos, val in enumerate(user_playlist_music_name_list):
                         if pos != len(user_playlist_music_name_list) - 1:
@@ -2404,30 +2383,30 @@ class Music(commands.Cog):
                         nouvelle_ligne = f"{playlistname}="
                         for pos, n in enumerate(file_music_index):
                             if pos != len(file_music_index) - 1:
-                                n_name = self.music_list_handler.getName(str(n))
+                                n_name = await self.music_list_handler.getName(str(n))
                                 nouvelle_ligne += f'{n_name},'
 
                             else:
-                                n_name = self.music_list_handler.getName(str(n))
+                                n_name = await self.music_list_handler.getName(str(n))
                                 nouvelle_ligne += f'{n_name}'
                                 # On est bon ici
-                    else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** existe déjà dans la playlist !") 
-                    output_text += f"`{self.music_list_handler.getName(str(indexes))}` a été ajoutée."
+                    else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{await self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** existe déjà dans la playlist !") 
+                    output_text += f"`{await self.music_list_handler.getName(str(indexes))}` a été ajoutée."
                 elif action_type == "remove": # Enlever un index
                     if indexes in file_music_index:
                         file_music_index.remove(indexes)
                         nouvelle_ligne = f"{playlistname}="
                         for pos, n in enumerate(file_music_index):
                             if pos != len(file_music_index) - 1:
-                                n_name = self.music_list_handler.getName(str(n))
+                                n_name = await self.music_list_handler.getName(str(n))
                                 nouvelle_ligne += f'`{n_name}`,'
 
                             else:
-                                n_name = self.music_list_handler.getName(str(n))
+                                n_name = await self.music_list_handler.getName(str(n))
                                 nouvelle_ligne += f'`{n_name}`'
 
-                    else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** n'existe pas dans la playlist !") 
-                    output_text += f"`{self.music_list_handler.getName(str(indexes))}` a été enlevée."
+                    else: embed = create_embed(title="Playlist-modify", description=f"Erreur !\nLa musique `{await self.music_list_handler.getName(str(user_index_input))}` **({user_index_input})** n'existe pas dans la playlist !") 
+                    output_text += f"`{await self.music_list_handler.getName(str(indexes))}` a été enlevée."
             else: 
                 if action_type == "add": # Ajouter l'index erreur 
                     embed = create_embed(title="Playlist-modify", description=f"Une erreur est survenue, pour ajouter une ou des musiques, merci d'utiliser ce format:\n`/g-laylist-modify add 254`\n`/g-laylist-modify add 254,255,256,257`")

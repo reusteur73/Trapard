@@ -120,39 +120,41 @@ def get_snooze_time(t1, t2):
     return (datetime.datetime.now() + datetime.timedelta(minutes=dix_percent)).timestamp()
 
 class RappelsHandler:
-    def __init__(self, conn: asqlite.Connection, cursor: asqlite.Cursor):
-        self.conn = conn
-        self.cursor = cursor
+    def __init__(self, pool: asqlite.Pool):
+        self.pool = pool
 
     async def add(self, rappel_timestamp: int, rappel_texte: str, rappel_auteur: int, rappel_notifié: bool, rappel_channel: int):
         """Ajoute un rappel à la base de données."""
         now = datetime.datetime.now().timestamp()
         rappel_data = (rappel_timestamp, rappel_texte, rappel_auteur, rappel_notifié, rappel_channel, now)
-        await self.cursor.execute("INSERT INTO rappels (timestamp, texte, auteur, notified, channel, created_at) VALUES (?, ?, ?, ?, ?, ?)", rappel_data)
-        await self.conn.commit()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO rappels (timestamp, texte, auteur, notified, channel, created_at) VALUES (?, ?, ?, ?, ?, ?)", rappel_data)
+        return
 
     async def delete(self, rappel_id: int):
-        await self.cursor.execute("DELETE FROM rappels WHERE id = ?", (rappel_id,))
-        await self.conn.commit()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM rappels WHERE id = ?", (rappel_id,))
+        return
 
     async def get_all(self, auteur: int=None):
         """Renvoie les rappels de l'auteur: `data[0][1] = timestamp`, `data[0][2] = texte`, `data[0][3] = auteur`, `data[0][4] = notified`, `data[0][5] = channel`"""
-        if auteur:
-            await self.cursor.execute("SELECT * FROM rappels WHERE auteur = ?", (auteur,))
-        else:
-            await self.cursor.execute("SELECT * FROM rappels")
-        rows = await self.cursor.fetchall()
+        async with self.pool.acquire() as conn:
+            if auteur:
+                rows = await conn.fetchall("SELECT * FROM rappels WHERE auteur = ?", (auteur,))
+            else:
+                rows = await conn.fetchall("SELECT * FROM rappels")
         return rows
 
 class SnoozeView(discord.ui.View):
-    def __init__(self, rappel_owner_id: int, snooze_time, rappel_texte: str, channel: int, conn: asqlite.Connection, cursor: asqlite.Cursor):
+    def __init__(self, rappel_owner_id: int, snooze_time, rappel_texte: str, channel: int, pool: asqlite.Pool):
         super().__init__(timeout=1500)
         self.owner = rappel_owner_id
         self.time = int(snooze_time)
         self.texte = rappel_texte
         self.channel = channel
-        self.conn = conn
-        self.cursor = cursor
+        self.pool = pool
 
     @discord.ui.button(label='Snooze', style=discord.ButtonStyle.green, custom_id="snooze", emoji="⏰")
     async def snooze(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -161,8 +163,9 @@ class SnoozeView(discord.ui.View):
         if int(self.owner) == interaction.user.id:
             now = int(datetime.datetime.now().timestamp())
             rappel_data = (self.time, f"snooze du rappel: `{self.texte}`", self.owner, 0, self.channel, now)
-            await self.cursor.execute("INSERT INTO rappels (timestamp, texte, auteur, notified, channel, created_at) VALUES (?, ?, ?, ?, ?, ?)", rappel_data)
-            await self.conn.commit()
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("INSERT INTO rappels (timestamp, texte, auteur, notified, channel, created_at) VALUES (?, ?, ?, ?, ?, ?)", rappel_data)
             embed = create_embed(title="Rappel", description=f"Ok {interaction.user.mention}, tu as activé le snooze du rappel `{self.texte}` il se déclanchera le <t:{self.time}:F> <t:{self.time}:R>!")
             return await interaction.followup.send(embed=embed)
         return
@@ -170,7 +173,7 @@ class SnoozeView(discord.ui.View):
 class Rappels(commands.Cog):
     def __init__(self, bot: Trapard):
         self.bot: Trapard = bot
-        self.handler = RappelsHandler(conn=self.bot.db_conn, cursor=self.bot.cursor)
+        self.handler = RappelsHandler(pool=self.bot.pool)
         self.first_run = True
         self.rappel_errors = 0
         self.rappels_check.start()
@@ -252,7 +255,7 @@ class Rappels(commands.Cog):
                 await asyncio.sleep(120)
                 self.first_run = False
                 print("end sleep")
-            handler = RappelsHandler(conn=self.bot.db_conn, cursor=self.bot.cursor)
+            handler = RappelsHandler(pool=self.bot.pool)
             rappels = await handler.get_all()
             rappels = [rappel for rappel in rappels if int(rappel[1]) <= int(datetime.datetime.now().timestamp())]
             for rappel in rappels:
@@ -264,7 +267,7 @@ class Rappels(commands.Cog):
                 if channel:
                     user = self.bot.get_user(int(rappel[3]))
                     if user:
-                        view = SnoozeView(rappel_owner_id=rappel[3], snooze_time=snooze, rappel_texte=rappel[2], channel=rappel[5], conn=self.bot.db_conn, cursor=self.bot.cursor)
+                        view = SnoozeView(rappel_owner_id=rappel[3], snooze_time=snooze, rappel_texte=rappel[2], channel=rappel[5], pool=self.bot.pool)
                         embed = create_embed(title="Rappel déclanché", description=f"- Rappel: **{rappel[2]}**\n- Créé <t:{int(rappel[6])}:R>.")
                         await channel.send(f"{user.mention}", view=view, embed=embed)
                         await handler.delete(rappel[0])
@@ -275,4 +278,3 @@ class Rappels(commands.Cog):
 
 async def setup(bot: Trapard):
     await bot.add_cog(Rappels(bot))
-    

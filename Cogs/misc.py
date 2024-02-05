@@ -1456,7 +1456,7 @@ class Misc(commands.Cog):
                 userID = user.id
 
             avatar_image = await get_avatar(user, self.bot.session)
-            userHandler = Trapardeur(conn=self.bot.db_conn, cursor=self.bot.cursor, userId=str(userID))
+            userHandler = Trapardeur(pool=self.bot.pool, userId=str(userID))
             if await userHandler.is_in():
                 data = await userHandler.get()
                 # data = load_json_data(item="trapeusr", userid=str(ctx.user.id))
@@ -1490,7 +1490,7 @@ class Misc(commands.Cog):
     async def trapardeurtop(self, ctx: commands.Context):
         """Affiche le top 25 des trapardeurs."""
         await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-        data = await Trapardeur(conn=self.bot.db_conn, cursor=self.bot.cursor).get_all()
+        data = await Trapardeur(pool=self.bot.pool).get_all()
         data = set(data)
         sorted_data = sorted(data, key=lambda x: x[2], reverse=True)
         fields = f"```{printFormat('Pseudo', 17)}|{printFormat('Niveau', 10)}|{printFormat('XP', 10)}|{printFormat('Temps vocal', 17)}|{printFormat('Messages', 10)}|{printFormat('Commandes', 10)}\n"
