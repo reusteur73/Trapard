@@ -1,17 +1,18 @@
-import os, discord, random, asyncio, datetime, torch, inspect
+import os, discord, random, asyncio, datetime, torch, inspect, urllib3, traceback, json
 from discord.ui import UserSelect
 from discord import app_commands
-from .utils.functions import LogErrorInWebhook, format_duration, load_json_data, create_embed, command_counter, printFormat, convert_str_to_emojis, trapcoins_handler, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int
+from .utils.functions import LogErrorInWebhook, format_duration, load_json_data, create_embed, command_counter, printFormat, convert_str_to_emojis, trapcoins_handler, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data
 from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur
 from .utils.context import Context
-from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH
+from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH,R34_FOLDER
 from discord.ext import commands
 from typing_extensions import Annotated
 from typing import Optional, NamedTuple, TypedDict, Tuple, Literal
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import WebDriverException
 from discord_webhook import DiscordWebhook
 from PIL import Image, ImageDraw, ImageFont
 from base64 import b64decode
@@ -57,6 +58,40 @@ def format_duration2(duration_in_seconds):
             return f'{minutes:02}m {seconds:02}s'
     except Exception as e:
         LogErrorInWebhook()
+
+class Rule34View(discord.ui.View):
+    def __init__(self, img_url: str, bot: Trapard):
+        super().__init__(timeout=3200)
+        self.img_url = img_url
+        self.bot = bot
+    
+    @discord.ui.button(label="Re-flip", style=discord.ButtonStyle.green, emoji="🔄")
+    async def my_user_select(self, interaction: discord.Interaction, button: discord.Button):
+        button.disabled = True
+        self.stop()
+        await interaction.response.edit_message(view=self)
+        return await handle_r34(bot=self.bot, userid=interaction.user.id)
+
+    @discord.ui.button(label="Ajouter au Cringédex", style=discord.ButtonStyle.blurple, emoji="⭐")
+    async def handle_cr(self, interaction: discord.Interaction, button: discord.Button):
+        async with self.bot.pool.acquire() as conn:
+            async with conn.transaction():
+                data = await conn.fetchone("SELECT cringeList FROM cringedex WHERE userId=?", (str(interaction.user.id),))
+                if data is None:
+                    json_ = [self.img_url]
+                    data = (str(interaction.user.id), json.dumps(json_))
+                    await conn.execute("INSERT INTO cringedex (userId, cringeList) VALUES (?, ?)", data)
+                    embed = create_embed(title="Cringédex", description=f"Image ajoutée au cringédex de {interaction.user.display_name} !")
+                else:
+                    json_ = json.loads(data[0])
+                    if self.img_url in json_:
+                        embed = create_embed(title="Cringédex", description=f"Cette image est déjà dans votre cringédex !")
+                        return await interaction.response.send_message(embed=embed)
+                    json_.append(self.img_url)
+                    data = (json.dumps(json_), str(interaction.user.id))
+                    await conn.execute("UPDATE cringedex SET cringeList=? WHERE userId=?", data)
+                    embed = create_embed(title="Cringédex", description=f"Image ajoutée au cringédex de {interaction.user.display_name} !")
+        return await interaction.response.send_message(embed=embed)
 
 class SelectFavSongUser(discord.ui.View):
     def __init__(self):
@@ -305,6 +340,44 @@ def calculate_level(xp_total):
 def create_image_with_color(color, width=200, height=200):
     image = Image.new("RGB", (width, height), color)
     return image
+
+async def handle_r34(bot: Trapard, userid: discord.User):
+    chann = bot.get_channel(1042529320675053598)
+    if chann:
+        user = bot.get_user(userid)
+        await command_counter(user_id=str(userid), bot=bot)
+        try:
+            embed = create_embed(title="Rule34", description="Chargement...")
+            origin = await chann.send(embed=embed)
+            tags, buffer, ext, img_url = await asyncio.wait_for(get_rule34_data(session=bot.session), timeout=30)
+            # save the image
+            if buffer:
+                if len(tags) < 1024:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags}```", "inline": False}]
+                if len(tags) > 1024 and len(tags) < 2048:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
+                                {"name": "Tags (suite, il y en a beaucoup X_X)", "value": f"```{tags[1024:]}```", "inline": False}]
+                if len(tags) > 2048:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
+                                {"name": "Tags (suite il y en a beaucoup X_X)", "value": f"```{tags[1024:2048]}```", "inline": False},
+                                {"name": "Tags (suite, il y en vraiment a beaucoup X_X)", "value": f"```{tags[2048:]}```", "inline": False}]
+                file = discord.File(f"{R34_FOLDER}rule34.{ext}", filename=f"rule34.{ext}")
+                embed = create_embed(title="Rule34",description="", fields=fields)
+                embed.set_image(url=f"attachment://rule34.{ext}")
+                await origin.edit(embed=embed, attachments=[file], view=Rule34View(img_url=img_url, bot=bot))
+                return os.remove(f"{R34_FOLDER}rule34.{ext}")
+        except asyncio.TimeoutError:
+            return await origin.edit(content="La commande a pris trop de temps à s'exécuter.")
+        except urllib3.exceptions.MaxRetryError as e:
+            return await origin.edit(content="Une erreur s'est produite lors de l'exécution de la commande.")
+        except WebDriverException as e:
+            return await origin.edit(content=f"WebDriverException occurred: {e}")
+        except Exception as e:
+            await origin.edit(content=f"Erreur\n```{e}```")
+            await origin.edit(content=f"{traceback.format_exc()}")
 
 class TranslateError(Exception):
     def __init__(self, status_code: int, text: str) -> None:
@@ -1011,7 +1084,6 @@ class Parier(discord.ui.View):
                 embed = create_embed(title=title, description=f"- <@{self.player1}> (`👑`) vs <@{self.player2}>\n\n- Pari `OFF`.\n\n- **À toi de choisir :**")
             await interaction.message.edit(embed=embed, view=game_view)
 
-
 class AttenteJoueur(discord.ui.View):
     def __init__(self, ctx: commands.Context, player1, wanted_game: str, bot: Trapard):
         super().__init__(timeout=500)
@@ -1562,9 +1634,6 @@ class Misc(commands.Cog):
         obj = self.bot.get_command(command.replace('.', ' '))
         if obj is None:
             return await ctx.send('Cette commande ne semble pas exister.')
-
-        # since we found the command we're looking for, presumably anyway, let's
-        # try to access the code itself
         src = obj.callback.__code__
         module = obj.callback.__module__
         filename = src.co_filename
@@ -1576,6 +1645,11 @@ class Misc(commands.Cog):
 
         final_url = f'<{source_url}/blob/{branch}/{location}#L{firstlineno}-L{firstlineno + len(lines) - 1}>'
         await ctx.send(final_url)
+
+    @commands.hybrid_command(name="rule34", aliases=["r34"])
+    async def rule34(self, ctx: commands.Context):
+        if ctx.channel.name == "cringe":
+            return await handle_r34(bot=self.bot, userid=ctx.author.id)
 
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     
