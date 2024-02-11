@@ -422,8 +422,13 @@ class MusicList_Handler():
         return `index`, `user_downloader` of song by music_name
         """
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchone("SELECT pos, downloader FROM musiques WHERE name = ?", name)
-        return str(data[0]), str(data[1])
+            data = await conn.fetchone("SELECT pos, downloader FROM musiques WHERE name = ?", (name,))
+        if data:
+            pos, downloader = data
+            return str(pos), str(downloader)
+        else: 
+            print("error fetching", name)
+            return None, None
 
     async def find_song_by_name(self, name: str):
 
@@ -508,9 +513,6 @@ class MusicList_Handler():
         """
             return list of index that are in a created playlist.
         """
-
-
-
         with open(PLAYLIST_LIST, "r", encoding="utf-8") as f:
             lines = f.readlines()
             data = []
@@ -518,7 +520,7 @@ class MusicList_Handler():
                 _, musiques = line.split("=", maxsplit=1)
                 musiques_list = musiques.split(',')
                 for musique in musiques_list:
-                    index = await self.get_index_by_music_name(musique)[0]
+                    index, _ = await self.get_index_by_music_name(musique.strip())
                     data.append(index)
         return data
 
@@ -640,7 +642,7 @@ class MusicList_Handler():
 
 class SuggestionPlay(discord.ui.View):
     try:
-        def __init__(self, server_id, ctx: commands.Context, bot:Trapard, index_list: list=None, index: int=None):
+        def __init__(self, server_id, ctx: commands.Context, bot:Trapard,music_list_handler: MusicList_Handler, music_controler, index_list: list=None, index: int=None):
             super().__init__(timeout=None)
             self.bot = bot
             if index:
@@ -649,6 +651,8 @@ class SuggestionPlay(discord.ui.View):
                 self.index_list = index_list
             self.serverid = server_id
             self.ctx = ctx
+            self.music_list_handler = music_list_handler
+            self.music_controler = music_controler
 
             if index:
                 self.play_btn = discord.ui.Button(style=discord.ButtonStyle.green, label=f'play {self.index}', custom_id=f"play_{index}", disabled=False)
@@ -671,31 +675,35 @@ class SuggestionPlay(discord.ui.View):
                     self.add_item(self.play_btn)
                     self.play_btn.callback = lambda interaction=self.ctx, button=self.play_btn: self.on_button_click(interaction, button, index=index)
                     self.add_item(self.playnext_btn)
-                    self.playnext_btn.callback = lambda interaction=self.ctx, button=self.playnext_btn: self.on_button_click(interaction, button, index=index)
+                    self.playnext_btn.callback = lambda interaction=self.ctx, button=self.playnext_btn: self.on_button_click(interaction, button, index=index)            
 
-
-
-
-        async def play(self, type, index):
-            index_to = type.split("_")[1]
-            if "playnext" in type:
-                return await Music.play_next.callback(ctx=self.ctx, index=str(index_to))
-            else:
-                return await Music.play.callback(ctx=self.ctx, index=str(index_to))
         async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button, index):
-            try:
-                await interaction.response.defer()
-            except:
-                pass
-            if index:
-                return await self.play(type=button.custom_id, index=index)
-            else:
-                return await self.play(type=button.custom_id, index=index)
-
+            try:await interaction.response.defer()
+            except:pass
+            cmd, idx = button.custom_id.split("_")
+            name = await self.music_list_handler.getName(index=idx)
+            if cmd == "play":
+                if interaction.guild.voice_client:
+                    await self.music_controler.add_to_queue(interaction.guild.id, name)
+                else:
+                    user_vocal = interaction.user.voice.channel
+                    vc = await user_vocal.connect()
+                    self.music_controler.voice_clients[interaction.guild.id] = vc
+                    await self.music_controler.add_to_queue(interaction.guild.id, name)
+                    await self.music_controler.play_music(interaction.guild.id, vc=vc)
+                embed = create_embed(title="Musique", description=f"`{name}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
+                return await interaction.followup.send(embed=embed)
+            elif cmd == "playnext":
+                if interaction.guild.voice_client:
+                    await self.music_controler.add_next_to_queue(interaction.guild.id, name)
+                    embed = create_embed(title="Musique", description=f"`{name}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
+                else:
+                    embed = create_embed(title="Musique", description=f"Il semble que le bot ne soit pas connecté.", suggestions=["queue","mlist","playlist-play"])
+                return await interaction.followup.send(embed=embed)
     except Exception as e:
         LogErrorInWebhook()
 
-async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_list_handler: MusicList_Handler, bot: Trapard, ctx: commands.Context=None):
+async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_list_handler: MusicList_Handler,music_controler,music_session, bot: Trapard, ctx: commands.Context=None):
     """Download youtube video from url."""
     def check_file(name:str):
         """Check if file exists and is not empty"""
@@ -775,7 +783,7 @@ async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_
                 else:
                     await chann.send(embed=embed)
                 return False
-            view = SuggestionPlay(server_id=serverid, ctx=ctx, bot=bot, index=index)
+            view = SuggestionPlay(server_id=serverid, ctx=ctx, bot=bot, index=index, music_controler=music_controler, music_list_handler=music_list_handler)
             message = formatMention + f" La musique `{video.title}` **N°{index}** est téléchargée !"
             chann = bot.get_channel(int(channel_id))
             embed = create_embed(title="Musique", description=message)
@@ -1058,8 +1066,9 @@ class MusicController():
                 LogErrorInWebhook()
 
             # Add stats to server session
-            self.music_session[server_id]['music_played'] += 1
-            self.music_session[server_id]['time'] += current_song_time
+            if server_id in self.music_session:
+                self.music_session[server_id]['music_played'] += 1
+                self.music_session[server_id]['time'] += current_song_time
 
             # Check if there is still user in vc:
             activity = discord.CustomActivity(
@@ -1622,7 +1631,16 @@ class DropDown(discord.ui.Select): # Youtube Select
             user = interaction.user
             await interaction.response.send_message(f"La musique {val} est en cours de téléchargement ! 🦈")
             user = str(user).split("#")[0]
-            if await download_from_url(url=url, user=user, channel_id=channel, userid=userid, serverid=serverid, cmd="search", ctx=self.ctx, bot=self.bot, music_list_handler=self.music_list_handler) == True:
+            if await download_from_url(url=url, 
+                                        user=user, 
+                                        channel_id=channel, 
+                                        userid=userid, serverid=serverid, 
+                                        cmd="search", 
+                                        ctx=self.ctx, 
+                                        bot=self.bot, 
+                                        music_list_handler=self.music_list_handler
+                                        
+                                        ) == True:
                 # await interaction.channel.send("Téléchargement terminé ! 🦈")
                 return
             else:
@@ -1656,10 +1674,12 @@ class Music(commands.Cog):
     @commands.hybrid_group(name="play")
     async def play1(self, ctx: commands.Context):
         pass
+
     @play1.command() # old: /play
     @app_commands.describe(index="Exemple : 124. Autre exemple : 124,126,214,128,1,2")
     async def music(self, ctx: commands.Context, index:str=None, musique_name:str=None):
         """Joue une ou plusieurs musique(s)."""
+        await command_counter(user_id=str(ctx.author.id), bot=self.bot)
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if not index and not musique_name:
@@ -1956,7 +1976,18 @@ class Music(commands.Cog):
                 userid = interaction.author.id
                 user = str(user).split("#")[0]
                 cmd = "DL"
-                if await download_from_url(url=url, user=user, channel_id=interaction.channel.id, userid=userid, serverid=interaction.guild.id, cmd=cmd, ctx=interaction, bot=self.bot, music_list_handler=self.music_list_handler) == True:
+                if await download_from_url(url=url, 
+                    user=user, 
+                    channel_id=interaction.channel.id,
+                    userid=userid, 
+                    serverid=interaction.guild.id, 
+                    cmd=cmd, 
+                    ctx=interaction, 
+                    bot=self.bot, 
+                    music_list_handler=self.music_list_handler,
+                    music_controler=self.music_controler,
+                    music_session=self.music_session,
+                ) == True:
                     pass
                 return
             else:
@@ -2005,7 +2036,6 @@ class Music(commands.Cog):
                     return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer.", ephemeral=True)
         except Exception as e:
             LogErrorInWebhook()
-
 
 # Music controler
     @commands.hybrid_command(name='skip', aliases=["next"]) # old: /skip
@@ -2070,6 +2100,10 @@ class Music(commands.Cog):
                 embed = create_embed(title="Suppression", description=f"<@{ctx.author.id}>\n- La musique {index} est présente dans une playlist !\n\n- Merci de l'enlever avec </playlist-modify:1115881059352068176> avant.")
                 return await ctx.send(embed=embed)
             music_name = await self.music_list_handler.getName(str(index))
+            if music_name == "Unknown index.":
+                next_index = await self.music_list_handler.get_next_index()
+                embed = create_embed(title="Suppression", description=f"<@{ctx.author.id}>\n- La musique {index} semble ne pas exister !\n\n- **L'index maximal actuel dans la mlist est {next_index - 1}**.")
+                return await ctx.send(embed=embed)
             path = MUSICS_FOLDER + music_name + ".mp3"
             try:
                 os.remove(path)
@@ -2097,9 +2131,9 @@ class Music(commands.Cog):
             result, found = await self.music_list_handler.find_song_by_name(nom)
             if len(found) <= 5:
                 if len(found) == 1:
-                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index=found[0], bot=self.bot)
+                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index=found[0], bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler)
                 else:
-                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index_list=found, bot=self.bot)
+                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index_list=found, bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler)
                 embed = create_embed(title="Is-song", description=result, suggestions=["play", "mlist", "queue"])
                 return await interaction.send(embed=embed, view=suggestions)
             else:
@@ -2281,6 +2315,7 @@ class Music(commands.Cog):
 
                 with open(file_path, 'w') as f:
                     f.writelines(lines)
+            
             lines = open(PLAYLIST_LIST, "r").readlines()
             index = 0
             for line in lines:
