@@ -30,7 +30,12 @@ class Context(commands.Context):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    # OVERWRITE HERE
+    @discord.utils.cached_property
+    def replied_message(self) -> Optional[discord.Message]:
+        ref = self.message.reference
+        if ref and isinstance(ref.resolved, discord.Message):
+            return ref.resolved
+        return None
 
 class GuildContext(Context):
     author: discord.Member

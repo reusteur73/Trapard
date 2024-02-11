@@ -146,7 +146,9 @@ class Trapard(commands.Bot):
     # BOT EVENTS :
     async def on_message(self, message: discord.Message):
         # REALY REALY BAD CODE HERE!!! 
-        await self.process_commands(message) # Permet de faire fonctionner les commandes
+        ctx = await self.get_context(message, cls=Context)
+        await self.invoke(ctx)
+        # await self.process_commands(message) # Permet de faire fonctionner les commandes
         await command_counter(user_id=str(message.author.id), type="message_sent", bot=self)
         # SUDOKU
         if isinstance(message.channel, discord.TextChannel):
@@ -463,15 +465,15 @@ class Trapard(commands.Bot):
         guild = member.guild
         if guild.system_channel is not None:
             text = f"Bienvenue à {member.display_name} sur le serveur !"
-            colored_text = convert_txt_to_colored(text=text, color="green", background="white", bold=True)
+            colored_text = convert_txt_to_colored(text=text, color="cyan", background="dark", bold=True)
             embed = create_embed(title="Nouveau membre", description=colored_text)
             await guild.system_channel.send(embed=embed)
 
     async def on_member_remove(self, member: discord.Member):
         guild = member.guild
         if guild.system_channel is not None:
-            text = f"Huez tous {member.display_name} qui a quitté le serveur !"
-            colored_text = convert_txt_to_colored(text=text, color="red", background="white", bold=True)
+            text = f"Booouuuhhhh, {member.display_name} a quitté le serveur !"
+            colored_text = convert_txt_to_colored(text=text, color="red", background="dark", bold=True)
             embed = create_embed(title="Déserteur", description=colored_text)
             await guild.system_channel.send(embed=embed)
 

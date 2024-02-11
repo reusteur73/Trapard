@@ -77,8 +77,6 @@ class TrapardeurV2:
     def __str__(self):
         return f"userId: {self.userId}, vocalTime: {self.vocalTime}, messageSent: {self.messageSent}, commandSent: {self.commandSent}"
 
-
-
 def LogErrorInWebhook(error=""):
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     f = "<@311013099719360512> Erreur à **" + current_time + "** :"
@@ -549,7 +547,6 @@ def write_item(item: str, userid: str=None, values: dict=None, array: list=None)
     except Exception as e:
         LogErrorInWebhook()
 
-
 async def lol_player_in_game(player, bot):
     APIKEY = os.environ.get("RIOT_API")
     zigotos_ID = {
@@ -605,7 +602,7 @@ def convert_k_m_to_int(string: str):
         return new_int
     except ValueError:
         return "ValueError"
-    
+
 def calc_usr_gain_by_tier(userid: int):
     user_tier = load_json_data(item="interets", userid=str(userid))
     return daily_claim_interest[user_tier["tier"]]
@@ -620,6 +617,10 @@ def convert_txt_to_colored(text: str, color: str, background: str=None, bold: bo
 
     background: :class:`Optional` `str` 
         List: red, dark, light-blue, white, light-grey
+
+    Ideal:
+        background: dark
+        color: green, white, cyan, blue, red, pink
     """
     escape_char = "\u001b"
     close_char = "[0;0m"
@@ -785,8 +786,6 @@ def getDriver():
     except Exception as e:
         LogErrorInWebhook()
 
-
-
 def addMemory(previousMem, role, content, user):
     try:
         if user is not None:
@@ -869,8 +868,6 @@ async def check_how_many_played2(gameID, bot):
             pass
     return found
 
-
-
 def str_to_list(strr):
 
     grid_list = []
@@ -879,7 +876,6 @@ def str_to_list(strr):
         grid_list.append(strr[key])
     
     return grid_list
-
 
 def solve_sudoku(grid):
     # Trouver la prochaine case vide
@@ -905,7 +901,6 @@ def solve_sudoku(grid):
     # Si aucun chiffre ne fonctionne, la grille n'a pas de solution
     return False
 
-
 def find_empty_cell(grid):
     # Trouver la première case vide dans la grille
     for row in range(9):
@@ -915,7 +910,6 @@ def find_empty_cell(grid):
     # Si toutes les cases sont remplies, retourner None
     return None, None
 
-
 def is_valid_move(grid, row, col, num):
     # Vérifier si le chiffre peut être placé dans la case sans violer les règles du sudoku
     return (
@@ -924,16 +918,13 @@ def is_valid_move(grid, row, col, num):
         and is_valid_box(grid, row - row % 3, col - col % 3, num)
     )
 
-
 def is_valid_row(grid, row, num):
     # Vérifier si le chiffre n'apparaît pas déjà sur la ligne
     return num not in grid[row]
 
-
 def is_valid_col(grid, col, num):
     # Vérifier si le chiffre n'apparaît pas déjà sur la colonne
     return all(grid[i][col] != num for i in range(9))
-
 
 def is_valid_box(grid, row, col, num):
     # Vérifier si le chiffre n'apparaît pas déjà dans la case 3x3
@@ -979,7 +970,6 @@ def compare_grids(solved_grid, user_grid):
         txt = f"Il y a {num_errors} erreurs."
 
     return txt
-
 
 def main_sudoku(non_complete_grid, usr_grid):
     if solve_sudoku(non_complete_grid):

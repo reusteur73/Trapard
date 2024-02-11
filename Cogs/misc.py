@@ -4,6 +4,7 @@ from discord import app_commands
 from .utils.functions import LogErrorInWebhook, format_duration, load_json_data, create_embed, command_counter, printFormat, convert_str_to_emojis, trapcoins_handler, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int
 from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur
+from .utils.context import Context
 from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH
 from discord.ext import commands
 from typing_extensions import Annotated
@@ -290,7 +291,7 @@ async def xp_calculation(user_id: str, bot: Trapard):
         1 command used = 1 xp
     """
     try:
-        handler = Trapardeur(conn=bot.db_conn, cursor=bot.cursor, userId=user_id)
+        handler = Trapardeur(pool=bot.pool, userId=user_id)
         data = await handler.get()
         xp = (data[0][2] * 2 / 600) + data[0][3] + data[0][4]
         return xp
@@ -1186,6 +1187,13 @@ class Misc(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
         self.bot = bot
     
+    @discord.utils.cached_property
+    def replied_message(self) -> Optional[discord.Message]:
+        ref = self.message.reference
+        if ref and isinstance(ref.resolved, discord.Message):
+            return ref.resolved
+        return None
+
     @commands.hybrid_command(aliases=['music-stats', "statistique", "db-stats", "statistiques"])
     async def stats(self, ctx: commands.Context):
         """Affiche différentes stats sur Trapard!"""
@@ -1277,10 +1285,9 @@ class Misc(commands.Cog):
             LogErrorInWebhook()
 
     @commands.hybrid_command(name="traduction", aliases=["trad", "traduire", "translate"])
-    async def trad(self, ctx: commands.Context, *, message: Annotated[Optional[str], commands.clean_content] = None):
+    async def trad(self, ctx: Context, *, message: Annotated[Optional[str], commands.clean_content] = None):
         """Traduire un texte en Français."""
         try:
-            loop = self.bot.loop
             if message is None:
                 reply = ctx.replied_message
                 if reply is not None:
@@ -1370,7 +1377,7 @@ class Misc(commands.Cog):
         return await ctx.send(embed=embed)
 
     @commands.hybrid_command()
-    async def binaire(self, ctx: commands.Context, *,texte: str):
+    async def binaire(self, ctx: Context, *,texte: str=None):
         """Convertie de texte en binaire, ou l'inverse."""
         def convert_to_binary(input_data):
             return ' '.join(format(ord(char), '08b') for char in str(input_data))
@@ -1381,6 +1388,12 @@ class Misc(commands.Cog):
             except ValueError:
                 return 'Un code binaire doit contenir uniquement des `1` et des `0` ...'
         try:
+            if texte is None:
+                reply = ctx.replied_message
+                if reply is not None:
+                    texte = reply.content
+                else:
+                    return await ctx.send('Aucun message à convertir.')
             if not texte or texte == "" or texte == " ":
                 return
             if set(texte.replace(" ", "")) == {"1", "0"}:
@@ -1529,6 +1542,13 @@ class Misc(commands.Cog):
             return await interaction.send(f"Voilà ton TTS {interaction.author.display_name}!", file=discord.File(f"{FILES_PATH}tts.mp3"))
         except Exception:
             LogErrorInWebhook()
+
+    @commands.hybrid_command(name="pile-face", aliases=["coin-flip", "pile", "face", "pile-ou-face"])
+    async def coin_flip(self, ctx: Context):
+        if random.randint(1,2) == 1:
+            return await ctx.send("https://files.reus.nc/images/100_pile.jpg")
+        else:
+            return await ctx.send("https://files.reus.nc/images/100_face.jpg")
 
     @commands.command()
     async def source(self, ctx: commands.Context, *, command: str = None):
