@@ -1,12 +1,17 @@
 import discord, datetime, traceback
 from typing import TYPE_CHECKING
 from .data import commands_id_dict, daily_claim_interest
-from .path import JSON_DATA, G_STATS
+from .path import JSON_DATA, G_STATS, R34_FOLDER
 from discord_webhook import DiscordWebhook
-import json, re, inspect, os, random, asqlite
+from selenium.webdriver.common.by import By
+from PIL import Image
+import undetected_chromedriver as uc
+import json, re, inspect, os, random, asqlite, io
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from discord.ext import commands
+from aiohttp import ClientSession
+
 if TYPE_CHECKING:
     from ...bot import Trapard
 
@@ -1022,3 +1027,26 @@ def afficher_grille_sudoku(grille):
                 elements_ligne.append(str(valeur))
         lignes.append(' '.join(elements_ligne))
     return '\n'.join(lignes)
+
+async def get_rule34_data(session: ClientSession):
+    driver = uc.Chrome(driver_executable_path=f"{R34_FOLDER}chromedriver_r34", headless=True, version_main=112)
+    driver.get("https://rule34.xxx/index.php?page=post&s=random")
+    img = driver.find_element(By.XPATH, "/html/body/div[5]/div/div[2]/div[1]/div[2]/div[1]/img")
+    img_source = img.get_attribute('src')
+    img_title = driver.title.split("Rule 34 - ")[1].split(" |")[0]
+    driver.close()
+    file_ext1 = img_source.split('.')[-1]
+    possible_ext = ["webm", "gif", "png", "jpg", "jpeg"]
+    found_ext = False
+    for s_ext in possible_ext:
+        if s_ext in file_ext1:
+            found_ext = s_ext
+            if found_ext == "webm":
+                found_ext = "gif"
+            break
+    async with session.get(img_source, ssl=False) as response:
+        response.raise_for_status()
+        data = await response.read()
+    im = Image.open(io.BytesIO(data))
+    im.save(f"{R34_FOLDER}rule34.{found_ext}")
+    return img_title, True, found_ext, img_source
