@@ -1,17 +1,16 @@
-from typing import Optional, Literal, Union
-from discord.ext import commands, tasks
+from typing import Literal, List
+from discord.ext import commands
 from youtube_search import YoutubeSearch
 from discord import app_commands
 from pytube import YouTube
 import discord
-from discord.utils import MISSING
 from discord.ui import Modal, TextInput
 from time import perf_counter
 from asyncio import sleep
-from bot import DB_PATH, MUSIC_LIST, PLAYLIST_LIST, Trapard
+from bot import PLAYLIST_LIST, Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, load_json_data, write_item, is_url, convert_txt_to_colored
-from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER
-import traceback, re, datetime, random, os, asyncio, threading, base64
+from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
+import traceback, re, random, os, asyncio, threading, base64
 from asqlite import Pool
 
 def is_comma_separated(index_string):
@@ -138,7 +137,6 @@ def parse_user_indexs(chaine: str):
         ALLOWED = ["1","2","3","4","5","6","7","8","9","0", "*", '-']
         while chaine.endswith(","):
             chaine = chaine[::-1].replace(",", "", 1)[::-1]
-            print(chaine)
         
         if ' ' in chaine:
             chaine = chaine.replace(" ", "")
@@ -189,7 +187,6 @@ def parse_user_indexs(chaine: str):
             if resultat.endswith(","):
                 resultat = resultat[::-1].replace(",", "", 1)[::-1]
             liste = resultat.split(",")
-            print("liste:",liste)
             return liste, None
 
         except ValueError:
@@ -427,7 +424,6 @@ class MusicList_Handler():
             pos, downloader = data
             return str(pos), str(downloader)
         else: 
-            print("error fetching", name)
             return None, None
 
     async def find_song_by_name(self, name: str):
@@ -797,12 +793,8 @@ async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_
                     await ctx.send(embed=embed, view=view)
                 else:
                     await chann.send(embed=embed, view=view)
-        # print("Download complete1... {}".format(filename))
-        print(music_artist, "__________________________")
         if music_artist is None or music_artist == "Inconnu":
-            print("doing get artist")
             music_artist = get_artist_from_title(title=video.title).artists[0]
-            print(music_artist, "artist")
         file_name = str(file_name).split(".")[0]
         await music_list_handler.add_music_to_list([str(file_name), int(duration), int(userid), str(music_artist)])
         return True
@@ -905,6 +897,8 @@ class MusicController():
             self.current_song_pbar = None
             self.unique_downloader = unique_downloader
             self.music_session = music_session
+            self.current_song = {}
+            self.current_song_status = {}
 
         async def play_next(self, server_id):
             if server_id not in self.voice_clients:
@@ -912,6 +906,9 @@ class MusicController():
                 return "Je ne suis pas connecté à un canal vocal pour ce serveur."
             vc = self.voice_clients[server_id]
             await self.play_music(server_id, vc)
+
+        def get_current_playing_song(self, server_id):
+            return self.current_song[server_id], self.current_song_status[server_id]['c_time']
 
         async def play_music(self, server_id: int, vc: discord.VoiceClient):
             if server_id not in self.voice_clients:
@@ -934,6 +931,8 @@ class MusicController():
                 self.bot.current_track[server_id] = name
             if server_id not in self.music_session:
                 self.music_session[server_id] = {'music_played': 0, 'time': 0}
+
+            self.current_song[server_id] = music_path
 
             source = discord.FFmpegPCMAudio(music_path)
             try:
@@ -969,6 +968,7 @@ class MusicController():
                     except:
                         dler = "Inconnu2"
                 track_duration = await self.music_list_handler.get_song_duration_by_index(str(index[0]))
+                self.current_song_status[server_id] = {'c_time': 0, 't_time': int(track_duration)}
                 pbar = create_progress_bar(current_song_time, int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(str(current_song_time)) + " /" + convert_to_minutes_seconds(str(track_duration))
                 embed = create_embed(title=f"Musique actuelle 🎝 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}**\n\n- `{pbar}`\n\n- `                 {convert_str_to_emojis(dur)}`")
@@ -999,6 +999,7 @@ class MusicController():
                 await sleep(0.55)
                 time_old += 1
                 current_time = perf_counter() - start_time
+                self.current_song_status[server_id]['c_time'] = int(current_time)
                 pourcent =  str(int(current_time * 100 / int(track_duration)))
                 current_song_time = int(current_time)
                 pbar = create_progress_bar(current_song_time, int(track_duration), bar_length=30)
@@ -1156,7 +1157,6 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
         em_error = create_embed(title="Erreur", description="- Le numéro que tu as donné n'est pas bon !!\n\n- Voila comment utiliser `/play`\n\n- `/play 5`\n\n- `/play 12,3,5,25,25,3,1`", suggestions=["queue","mlist","playlist-play"])
         messages = await getMusicQueue(interaction.guild.id, None, unique_downloader=self.music_controler.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
         view = PlayAllView(messages, interaction.guild.id, interaction, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.music_controler.unique_downloader)
-        print("oui", self.custom_id)
         if is_comma_separated(self.user_input) is True:
             wantedList, erreur = parse_user_indexs(self.user_input)
             if erreur is not None:
@@ -1449,7 +1449,6 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                             if exclude is not None:
                                 ___, dler = await music_list_handler.get_index_by_music_name(music)
                                 if int(dler) in exclude:
-                                    print("downloader EXCLUDED : ", dler)
                                     continue
                             await music_controler.add_to_queue(server_id, music)
                             added_musics_len += 1
@@ -1589,25 +1588,18 @@ class DropDownMlist(discord.ui.Select): # Youtube Select
                 await interaction.response.defer()
             except:
                 pass
-
-
             val = str(self.values[0])
-            print(val)
             self.user_id = str(val)
-
-            print(len(self.music_controler.unique_downloader), self.music_controler.unique_downloader)
             if val == "tous":
                 options = [discord.SelectOption(label="Tous", value=f"tous", default=True, emoji="🦈")]
             else:
                 options = [discord.SelectOption(label="Tous", value=f"tous", default=False, emoji="🦈")]
             for unique in self.music_controler.unique_downloader:
-                name = self.bot.get_user(int(unique)).display_name
+                user = await self.bot.fetch_user(int(unique))
                 if str(val) == str(unique):
-                    options.append(discord.SelectOption(label=name, value=f"{unique}", default=True))
+                    options.append(discord.SelectOption(label=user.display_name, value=f"{unique}", default=True))
                 else:
-                    options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
-
-
+                    options.append(discord.SelectOption(label=user.display_name, value=f"{unique}", default=False))
 
             # Par exemple :
             if val != 'tous':
@@ -1626,7 +1618,7 @@ class DropDownMlist(discord.ui.Select): # Youtube Select
     except Exception as e:
         LogErrorInWebhook()
 
-class DropDown(discord.ui.Select): # Youtube Select
+class DropDown(discord.ui.Select):
     try:
         def __init__(self, options, ctx, bot: Trapard, music_list_handler: MusicList_Handler):
             super().__init__(placeholder='Choisis une des musiques 🦈', options=options, max_values=1, min_values=1)
@@ -1652,7 +1644,6 @@ class DropDown(discord.ui.Select): # Youtube Select
                                         music_list_handler=self.music_list_handler
                                         
                                         ) == True:
-                # await interaction.channel.send("Téléchargement terminé ! 🦈")
                 return
             else:
                 return await interaction.channel.send("Erreur lors du téléchargement ! 🦈")
@@ -1660,7 +1651,7 @@ class DropDown(discord.ui.Select): # Youtube Select
     except Exception as e:
         LogErrorInWebhook()
 
-class DropDownView(discord.ui.View): # Youtube Select
+class DropDownView(discord.ui.View):
     try:
         def __init__(self, ctx):
             super().__init__()
@@ -1668,20 +1659,286 @@ class DropDownView(discord.ui.View): # Youtube Select
     except Exception as e:
         LogErrorInWebhook()
 
+class SoundBoardView(discord.ui.View):
+    """`sounds`: page_num list of a list """
+    def __init__(self, *, sounds: List[List[discord.ui.Button]], ctx: commands.Context, music_controler: MusicController, bot: Trapard):
+        super().__init__(timeout=None)
+        self.ctx = ctx
+        self.music_controler = music_controler
+        self.sounds = sounds
+        self.page_count = len(sounds)
+        self.current_page = 0
+        self.bot = bot
+        if self.sounds is not None:
+            for button in self.sounds[self.current_page]:
+                self.add_item(button)
+                button.callback = lambda interaction=self.ctx, button=button: self.play_sound(interaction, button,button.custom_id)
+            self.add_control_btns()
+
+    def add_control_btns(self):
+        self.boutton_last = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="▶️", custom_id="next", row=4)
+        self.boutton_first = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="⏭️", custom_id="last", row=4)
+        self.button_stg = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="🔷", custom_id="setting", row=4, disabled=True)
+        if self.current_page == 0:
+            self.boutton_previous = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="◀️", disabled=True, custom_id="prev", row=4)
+            self.boutton_suivant = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="⏮️", disabled=True, custom_id="first", row=4)
+        else:
+            self.boutton_suivant = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="⏮️", disabled=False, custom_id="first", row=4)
+            self.boutton_previous = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, emoji="◀️", disabled=False, custom_id="prev", row=4)
+
+
+        self.add_item(self.boutton_suivant)
+        self.add_item(self.boutton_previous)
+        self.add_item(self.button_stg)
+        self.add_item(self.boutton_last)
+        self.add_item(self.boutton_first)
+
+
+        self.boutton_suivant.callback = lambda interaction=self.ctx, button=self.boutton_suivant: self.go_to_first_page(interaction, button)
+        self.boutton_previous.callback = lambda interaction=self.ctx, button=self.boutton_previous: self.go_to_previous_page(interaction, button)
+        # self.boutton_stg.callback = lambda interaction=self.ctx, button=self.button_stg: self.(interaction, button)
+        self.boutton_last.callback = lambda interaction=self.ctx, button=self.boutton_last: self.go_to_next_page(interaction, button)
+        self.boutton_first.callback = lambda interaction=self.ctx, button=self.boutton_first: self.go_to_last_page(interaction, button)
+
+    async def show_current_page(self, interaction: discord.Interaction, direction: int):
+        self.current_page += direction
+        if self.current_page < 0:
+            self.current_page = 0
+        elif self.current_page >= self.page_count:
+            self.current_page = self.page_count - 1
+        elif self.current_page == self.page_count:
+            self.current_page = self.page_count
+        self.clear_items() # Remove all btns
+        for button in self.sounds[self.current_page]:
+            self.add_item(button)
+            button.callback = lambda interaction=self.ctx, button=button: self.play_sound(interaction, button,button.custom_id)
+        self.add_control_btns()
+        first = discord.utils.get(self.children, custom_id="first")
+        prev = discord.utils.get(self.children, custom_id="prev")
+        next = discord.utils.get(self.children, custom_id="next")
+        last = discord.utils.get(self.children, custom_id="last")
+
+        if self.current_page < 2:
+            first.disabled = True
+        else: 
+            first.disabled = False
+        if self.current_page < 1:
+            prev.disabled = True
+        else: 
+            prev.disabled = False
+        if self.current_page >= self.page_count - 1:
+            next.disabled = True
+        else: 
+            next.disabled = False
+        if self.current_page >= self.page_count - 2:
+            last.disabled = True
+        else: 
+            last.disabled = False
+
+        embed = create_embed(title="SoundBoard", description=f"Page {self.current_page+1}/{self.page_count}")
+        await interaction.message.edit(embed=embed,view=self)
+        try:
+            await interaction.response.defer()
+        except:
+            pass
+        
+    async def go_to_first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_current_page(interaction, -self.current_page)
+
+    async def go_to_previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_current_page(interaction, -1)
+
+    async def go_to_next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.page_count - 1:
+            await self.show_current_page(interaction, 1)
+        else:
+            await self.show_current_page(interaction, 0)
+    async def go_to_last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_current_page(interaction, self.page_count - 1 - self.current_page)
+
+    async def play_sound(self, interaction: discord.Interaction, button: discord.ui.Button, btn_name: str):
+        try:
+            await interaction.response.defer()
+        except:
+            pass
+        if not self.music_controler.is_vc(server_id=self.ctx.guild.id):
+            await self.music_controler.join_vc(server_id=self.ctx.guild.id, channel=self.ctx.author.voice.channel)
+        vc: discord.VoiceClient = self.music_controler.voice_clients[self.ctx.guild.id]
+        if vc.is_playing():
+            previous_source, time = self.music_controler.get_current_playing_song(server_id=self.ctx.guild.id)
+            hours, remainder = divmod(time, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            vc.pause()
+            source = discord.FFmpegPCMAudio(f"{SOUNDBOARD}{btn_name}.mp3")
+            vc.play(source)
+            while vc.is_playing():
+                await asyncio.sleep(0.2)
+            source = discord.FFmpegPCMAudio(previous_source, before_options=f'-ss {time}')
+            vc.play(source)
+        else:
+            source = discord.FFmpegPCMAudio(f"{SOUNDBOARD}{btn_name}.mp3")
+            vc.play(source)
+            while vc.is_playing:
+                await asyncio.sleep(0.5)
+            return await vc.disconnect()
+
+class SoundBoardManage:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def save_sound(self, sound_name: str, downloader: int):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO soundboard (name, downloader) VALUES (?,?)", (sound_name, downloader,))
+        return 
+    
+    async def get_all_sounds_name(self):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT name FROM soundboard")
+        if data:
+            out = []
+            for sound in data:
+                out.append(sound[0])
+            return out
+        else: return None
+
+class SoundBoardDropDown(discord.ui.Select):
+    try:
+        def __init__(self, options, ctx, bot: Trapard, soundboard_manager: SoundBoardManage):
+            super().__init__(placeholder='Choisis un des sons :', options=options, max_values=1, min_values=1)
+            self.ctx = ctx
+            self.bot = bot
+            self.soundboard_manager = soundboard_manager
+
+        async def callback(self, interaction: discord.Interaction):
+            val = self.values[0]
+            url = getVideoId(val)
+            await interaction.response.send_message(f"Le son {val} est en cours de téléchargement !")
+            if await download_from_urlV2(
+                url=url, 
+                channel_id=interaction.channel.id, 
+                userid=interaction.user.id,
+                cmd="search", 
+                ctx=self.ctx, 
+                bot=self.bot,
+                soundboard_manager=self.soundboard_manager
+            ) == True:
+                return
+            else:
+                return await interaction.channel.send(f"Erreur lors du téléchargement du son {val} !")
+                
+    except Exception as e:
+        LogErrorInWebhook()
+
+async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: SoundBoardManage , bot: Trapard, ctx: commands.Context=None):
+    """Download youtube video from url."""
+    def check_file(name:str):
+        """Check if file exists and is not empty"""
+        path = SOUNDBOARD
+        if name in os.listdir(path):
+            # Check file size
+            size = os.path.getsize(path + name)
+            if size > 0:
+                return True
+            else:
+                return False
+        else:
+            return False
+    
+    try:
+        video_url = url
+        video = YouTube(video_url)
+
+        duration = video.length
+        file_name = rename(video.title)
+
+        formatMention = "<@" + str(userid) + ">"
+        saved_names = await soundboard_manager.get_all_sounds_name()
+        if saved_names:
+            if file_name in saved_names:
+                embed = create_embed(title="Erreur", description=f"- {formatMention}, il semble que le son `{file_name}` ait déjà été téléchargée.\n\n- Le téléchargement a été annulé.")
+                if ctx is not None:
+                    await ctx.send(embed=embed)
+                else:
+                    await chann.send(embed=embed)
+                return False
+
+        url = video_url
+        if duration > 30:
+            embed = create_embed(title="Erreur", description=f"- {formatMention}, le son fait plus de **30 secondes**.\n\n- Le téléchargement a été annulé.")
+            if ctx is not None:
+                await ctx.send(embed=embed)
+            else:
+                await chann.send(embed=embed)
+            return False
+        
+
+        async def download_thread(url, channel_id):
+            # Code for downloading the video
+
+
+            video_url = url
+            
+            video = YouTube(video_url)
+
+            videoName = rename(video.title)
+            stream = video.streams.filter(only_audio=True).first()
+
+            stream.download(output_path=SOUNDBOARD, filename=f'{videoName}')
+
+        def run_thread(coro):
+            asyncio.run(coro)
+
+        # Start the download in a separate thread
+        thread = threading.Thread(target=run_thread, args=(download_thread(url, channel_id),))
+        thread.start()
+
+        # Wait for the thread to finish
+        thread.join()
+        # Check if there was an exception in the thread
+        if thread.is_alive():
+            # The thread is still running, which means there was an exception
+            # Handle the exception here
+            return False
+        else:
+            if check_file(file_name) is False:
+                embed = create_embed(title="Erreur", description=f"- {formatMention}, il semble que la musique `{video.title}` n'ait pas été téléchargée.\n\n- La musique est peut-être soumise à une restriction d'âge ou n'existe pas.\n\n- Le téléchargement a été annulé.")
+                if ctx is not None:
+                    await ctx.send(embed=embed)
+                else:
+                    await chann.send(embed=embed)
+                return False
+            message = formatMention + f" Le son `{video.title}` est téléchargé !"
+            chann = bot.get_channel(int(channel_id))
+            embed = create_embed(title="Musique", description=message)
+            if cmd != "DL":
+                if ctx is not None:
+                    await ctx.send(embed=embed)
+                else:
+                    await chann.send(embed=embed)
+            else:
+                if ctx is not None:
+                    await ctx.send(embed=embed)
+                else:
+                    await chann.send(embed=embed)
+
+        file_name = str(file_name).split(".")[0]
+        await soundboard_manager.save_sound(str(file_name), int(userid))
+        return True
+    except Exception as e:
+        LogErrorInWebhook()
+
 playlist_data = []
 playlist_names = get_all_playlists_names()
-
-
 
 class Music(commands.Cog):
     """Music related cog."""
     def __init__(self, bot: Trapard) -> None:
         self.bot: Trapard = bot
-        self.unique_downloader = self.bot.unique_downloader
-        self.unique_downloader_display_names = self.bot.unique_downloader_display_names
         self.music_list_handler = MusicList_Handler(bot=self.bot)
         self.music_session = {}
-        self.music_controler = MusicController(bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader, music_session=self.music_session)
+        self.music_controler = MusicController(bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader, music_session=self.music_session)
     
     async def handler_music_input(self, index: str, musique_name:str, channel_name:str, author_voice: bool, author_id:int):
         if not index and not musique_name:
@@ -1763,7 +2020,6 @@ class Music(commands.Cog):
             liste = []
             d = await self.music_list_handler.get_all_music_name()
             for key, val in d.items():
-                print(key)
                 if musique_name.lower() in key.lower():
                     liste.append(app_commands.Choice(name=f"{key} ({val})", value=str(val)))
                 if len(liste) == 25:
@@ -1886,10 +2142,9 @@ class Music(commands.Cog):
         """Affiche la liste de toutes les musiques."""
         try:
             await command_counter(user_id=str(interaction.author.id), bot=self.bot)
-            print(len(self.unique_downloader), self.unique_downloader)
-            options = [discord.SelectOption(label="Tous", value=f"tous", default=True, emoji="🦈")]
-            for unique in self.unique_downloader:
-                user = self.bot.get_user(int(unique))
+            options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
+            for unique in self.bot.unique_downloader:
+                user = await self.bot.fetch_user(int(unique))
                 if user:
                     name = user.display_name
                     options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
@@ -2446,6 +2701,104 @@ class Music(commands.Cog):
                         string += f"{likedSongs}, "
                 embed = create_embed(title=f"Musiques likés de {user.display_name}", description=string)
                 return await ctx.send(embed=embed)
+        except Exception as e:
+            LogErrorInWebhook()
+
+# SoundBoard
+    @commands.hybrid_command(name="soundboard", aliases=["sb"])
+    async def soundboard(self, ctx: commands.Context):
+        try:
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall(f"SELECT name FROM soundboard")
+            if data:
+                output = []
+                for sound in data: 
+                    output.append(discord.ui.Button(label=sound[0], style=discord.ButtonStyle.blurple, custom_id=sound[0]))
+                sounds = [output[i:i + 20] for i in range(0, len(output), 20)] # list of list of 20 btns
+                view = SoundBoardView(sounds=sounds, ctx=ctx, music_controler=self.music_controler, bot=self.bot)
+                embed = create_embed(title="SoundBoard", description=f"Page 1/{len(sounds)}")
+                return await ctx.send(embed=embed,view=view, ephemeral=True)
+            else: 
+                embed = create_embed(title="SoundBoard", description=f"Aucun son ne semble avoir été téléchargé.")
+                return await ctx.send(embed=embed, ephemeral=True)
+            
+        except: LogErrorInWebhook()
+
+    @commands.hybrid_command(name='soundboard-download', aliases=['sbdl'])
+    @app_commands.describe(keysearch = "Url Youtube ou texte de recherche.")
+    async def sbdl(self, interaction: commands.Context, *, keysearch: str):
+        """Télécharger une musique, par url Youtube, ou par texte de recherche."""
+        try:
+            await command_counter(user_id=str(interaction.author.id), bot=self.bot)
+            if interaction.channel.name != "musique":
+                return await interaction.send("Merci d'utiliser le channel <#896275056089530380> **BUICON**", ephemeral=True)
+            if is_url(keysearch):
+                url = keysearch
+                if '?list=' in url:
+                    new_url = url.split("?list=")[0]
+                    embed = create_embed(title="Musique", description=f"L'url : `{url}` proviens d'une playlist !\n\nL'url est remplacée par : `{new_url}`.\n\nLe téléchargement est en cours...")
+                    await interaction.send(embed=embed)
+                    url = new_url
+                else:
+                    embed = create_embed(title="Musique", description=f"Téléchargement en cours...")
+                    await interaction.send(embed=embed)
+                user = interaction.author
+                userid = interaction.author.id
+                user = str(user).split("#")[0]
+                cmd = "DL"
+                if await download_from_urlV2(
+                    url=url, 
+                    channel_id=interaction.channel.id,
+                    userid=userid,
+                    cmd=cmd, 
+                    ctx=interaction, 
+                    bot=self.bot,
+                    soundboard_manager=SoundBoardManage(pool=self.bot.pool)
+                ) == True:
+                    pass
+                return
+            else:
+                string = keysearch.strip()
+                results = YoutubeSearch(string, max_results=25).to_dict()
+                index = 0
+                global videos
+                videos = {}
+                try:
+                    for result in results:
+                        if index == 5:
+                            break
+                        title, channel, id, durr = result["title"], result["channel"], result["id"], result["duration"]
+                        if title not in [v[0] for v in videos.values()]: # Check if the title is already present in the dictionary
+                            l = result["duration"].split(":")
+                            sec = int(l[1])
+                            min = int(l[0])
+                            tot = (min*60) + sec
+                            if int(tot) <= 20: 
+                                videos["video" + str(index)] = []
+                                videos["video" + str(index)].append(title)
+                                videos["video" + str(index)].append(channel)
+                                videos["video" + str(index)].append(id)
+                                videos["video" + str(index)].append(durr)
+                                index += 1
+                        else:
+                            print("SAME VALUE !!!!")
+                    if len(videos) == 0:
+                        return await interaction.send(f"Aucun résultat pour la recherche {keysearch}...\n\n**Penses à utiliser un lien Youtube à la place!**", ephemeral=True)
+                    descs = []
+                    for i in range(0, len(videos)):
+                        descs.append(f"Chaine: {str(videos[f'video{i}'][1])} | Durée: {str(videos[f'video{i}'][3])}")
+                except Exception as e:
+                    traceback.print_exc()
+                    print(e)
+                    return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer. {e}", ephemeral=True)
+                options = [discord.SelectOption(label=videos[f'video{i}'][0], description=descs[i]) for i in range(0, len(videos))]
+                drop_down = SoundBoardDropDown(options=options, ctx=interaction, bot=self.bot, soundboard_manager=SoundBoardManage(pool=self.bot.pool))
+                view = DropDownView(ctx=interaction)
+                view.add_item(drop_down)
+                try:
+                    await interaction.send(f"Résultat de la recherche `{string}`:", view=view)
+                except Exception as e:
+                    return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer.", ephemeral=True)
         except Exception as e:
             LogErrorInWebhook()
 
