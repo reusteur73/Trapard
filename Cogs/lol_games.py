@@ -44,9 +44,10 @@ class LolGames(commands.Cog):
             APIKEY = os.environ.get("RIOT_API")
             async with self.bot.pool.acquire() as conn:
                 data = await conn.fetchall("SELECT id, userId, ign, puuid, region, last_game_id FROM LoLGamesTracker")
-            # Affichez les données de la table
-            for row in data:
-                print(dict(row))
+
+            if self.bot.debug:
+                for row in data:
+                    print(dict(row))
 
             def draw_game(pseudo: str, rank: str, gameMode: str, championIcon, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, items: list, players: list, results: list, bans: list):
                 def draw_text(
@@ -355,14 +356,12 @@ class LolGames(commands.Cog):
                         if ban:
                             try:
                                 ban = ban.resize((26, 26))
-                                print("BAN", i, ban)
                                 img.paste(ban, (62+422+70+26+(l_step*i), 400-7), ban)
                             except: continue
                     else:
                         if ban:
                             try:
                                 ban = ban.resize((26, 26))
-                                print("BAN", i, ban)
                                 img.paste(ban, (62+422+70+26+sep+(l_step*i), 400-7), ban)
                             except: continue
 
@@ -408,7 +407,8 @@ class LolGames(commands.Cog):
 
                 # Requête pour obtenir les informations de classement du summoner
                 ranking_url = f"https://{region}.api.riotgames.com/lol/league/v4/entries/by-summoner/{encryptedId}?api_key={APIKEY}"
-                print(ranking_url)
+                if self.bot.debug:
+                    print(ranking_url)
                 async with self.bot.session.get(ranking_url) as ranking_response:
                     ranking_data = await ranking_response.json()
                 ranks = []
@@ -781,7 +781,8 @@ class LolGames(commands.Cog):
                                 LogErrorInWebhook()
                                 return
                             last_match = await get_last_matchs(puuid)
-                            print(last_match, last_stored_match)
+                            if self.bot.debug:
+                                print(last_match, last_stored_match)
                             if last_stored_match != last_match:
                                 if mentions == "None":
                                     mentions = "?"
