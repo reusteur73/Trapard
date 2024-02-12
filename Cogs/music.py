@@ -1114,6 +1114,17 @@ class MusicController():
                 return
             self.bot.music_queues[server_id].insert(0, name)
             return True
+    
+        def is_vc(self, server_id):
+            """Check if bot is already in a VoiceChannel."""
+            return server_id in self.voice_clients
+
+        async def join_vc(self, server_id: int, channel: discord.VoiceChannel):
+            """Join vc."""
+            if not self.is_vc(server_id):
+                vc = await channel.connect()
+                self.voice_clients[server_id] = vc
+
     except Exception as e:
         LogErrorInWebhook()
 
@@ -1660,6 +1671,8 @@ class DropDownView(discord.ui.View): # Youtube Select
 playlist_data = []
 playlist_names = get_all_playlists_names()
 
+
+
 class Music(commands.Cog):
     """Music related cog."""
     def __init__(self, bot: Trapard) -> None:
@@ -1669,6 +1682,44 @@ class Music(commands.Cog):
         self.music_list_handler = MusicList_Handler(bot=self.bot)
         self.music_session = {}
         self.music_controler = MusicController(bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader, music_session=self.music_session)
+    
+    async def handler_music_input(self, index: str, musique_name:str, channel_name:str, author_voice: bool, author_id:int):
+        if not index and not musique_name:
+            return QuestionnaireMusicPlay(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, custom_id="play-next")
+        if musique_name is not None:
+            index = musique_name
+        if channel_name != "musique":
+            return create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
+        if author_voice is None: # Si le user nest dans aucun voocal
+            return create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
+        output_musics = []
+        if is_comma_separated(index):
+            wantedList, erreur = parse_user_indexs(index)
+            if erreur is not None:
+                return create_embed(title="Erreur", description=f"- Le numéro que tu as donné n'est pas bon.\n{erreur}", suggestions=["play","play-next","mlist"])
+            for i in wantedList:
+                if i is not None:
+                    output_musics.append(await self.music_list_handler.getName(str(i)))
+            music_name = "Queue"
+        else: # pas de virgule
+            if "*" in index:
+                tmp = []
+                multiplicateur = int(index.split('*')[0])
+                valeur = int(index.split('*')[1])
+                tmp.extend([str(valeur)] * multiplicateur)
+                for t in tmp:
+                    output_musics.append(await self.music_list_handler.getName(str(t)))
+            else:
+                output_musics.append(await self.music_list_handler.getName(index))
+                try:
+                    music_name = await self.music_list_handler.getName(str(index))
+                except ValueError:
+                    return create_embed(title="Erreur", description=f"- Le numéro que tu as donné n'est pas bon.\n{erreur}", suggestions=["play","play-next","mlist"])
+                if music_name == "Song not found.":
+                    return create_embed(title="Erreur", description=f"- Le numéro que tu as donné n'est pas bon.\n{erreur}", suggestions=["play","play-next","mlist"])
+        for songName in output_musics:
+            await FavSongsDbHandler(pool=self.bot.pool, song_name=songName, user_id=str(author_id))
+        return output_musics
 
 # PLAY GROUP
     @commands.hybrid_group(name="play")
@@ -1679,81 +1730,30 @@ class Music(commands.Cog):
     @app_commands.describe(index="Exemple : 124. Autre exemple : 124,126,214,128,1,2")
     async def music(self, ctx: commands.Context, index:str=None, musique_name:str=None):
         """Joue une ou plusieurs musique(s)."""
-        await command_counter(user_id=str(ctx.author.id), bot=self.bot)
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            if not index and not musique_name:
-                return await ctx.send(QuestionnaireMusicPlay(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, custom_id="play-next"))
-            
-            if musique_name is not None:
-                index = musique_name
-
-            if ctx.channel.name != "musique":
-                embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
+            _musiques = await self.handler_music_input(index=index, musique_name=musique_name, channel_name=ctx.channel.name, author_id=ctx.author.id, author_voice=ctx.author.voice)
+            if isinstance(_musiques, discord.Embed):
                 return await ctx.send(embed=embed)
-            
-            if ctx.author.voice is None: # Si le user nest dans aucun voocal
-                embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
-                return await ctx.send(embed=embed)
+            elif isinstance(_musiques, list):
+                messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
 
-            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
-            view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
-
-            user_vocal = ctx.author.voice.channel
-            out = []
-            if is_comma_separated(index) is True:
-                wantedList, erreur = parse_user_indexs(index)
-                if erreur is not None:
-                    em_error = create_embed(title="Erreur", description=f"- Le numéro que tu as donné n'est pas bon.\n{erreur}", suggestions=["play","play-next","mlist"])
-                    return await ctx.send(embed=em_error)
-                for i in wantedList:
-                    if i is not None:
-                        out.append(await self.music_list_handler.getName(str(i)))
-                music_name = "Queue"
-            else: # pas de virgule
-                if "*" in index:
-                    tmp = []
-                    multiplicateur = int(index.split('*')[0])
-                    valeur = int(index.split('*')[1])
-                    tmp.extend([str(valeur)] * multiplicateur)
-                    for t in tmp:
-                        out.append(await self.music_list_handler.getName(str(t)))
-                else:
-                    out.append(await self.music_list_handler.getName(index))
-                    try:
-                        music_name = await self.music_list_handler.getName(str(index))
-                    except ValueError:
-                        return await ctx.send(embed=embed)
-                    if music_name == "Song not found.":
-                        return await ctx.send(embed=embed)
-            print("play Songs Name liste (out) = ", out)
-            
-            for songName in out:
-                await FavSongsDbHandler(pool=self.bot.pool, song_name=songName, user_id=str(ctx.author.id))
-
-            if ctx.guild.id in self.music_controler.voice_clients:
-                vc = self.music_controler.voice_clients[ctx.guild.id]
-                for i in out:
+                if not self.music_controler.is_vc(server_id=ctx.guild.id):
+                    await self.music_controler.join_vc(server_id=ctx.guild.id, channel=ctx.author.voice.channel)
+                vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
+                for i in _musiques:
                     if i is not None:
                         await self.music_controler.add_to_queue(ctx.guild.id, i)
                     else:
-                        return
-                embed = create_embed(title="Musique", description=f"`{out}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
-            else: # Need to connect 
-                user_vocal = ctx.author.voice.channel
-                vc = await user_vocal.connect()
-                self.music_controler.voice_clients[ctx.guild.id] = vc
-                for i in out:
-                    if i is not None:
-                        await self.music_controler.add_to_queue(ctx.guild.id, i)
-                    else:
-                        return
-                embed = create_embed(title="Musique", description=f"`{out}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
-            await ctx.send(embed=embed, view=view)
-            # Suggest user to modify the artist name if it's not the good one by sending private message containing the current artist name and music name
-            if not vc.is_playing():
-                await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
-            return
+                        continue
+                embed = create_embed(title="Musique", description=f"`{', '.join(_musiques)}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
+                await ctx.send(embed=embed, view=view)
+                if not vc.is_playing():
+                    await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                return
+            elif isinstance(_musiques, QuestionnaireMusicPlay):
+                return await ctx.send(_musiques)
         except:
             LogErrorInWebhook()
 
@@ -1796,24 +1796,15 @@ class Music(commands.Cog):
                 id, userId, songName = d
                 music_list.append(songName)
         random.shuffle(music_list)
-        if ctx.guild.id in self.music_controler.voice_clients:
-            vc = self.music_controler.voice_clients[ctx.guild.id]
-            for i in music_list:
-                if i is not None:
-                    await self.music_controler.add_to_queue(ctx.guild.id, i)
-                else:
-                    return
-            embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"]) 
-        else: # Need to connect
-            user_vocal = ctx.author.voice.channel
-            vc = await user_vocal.connect()
-            self.music_controler.voice_clients[ctx.guild.id] = vc
-            for i in music_list:
-                if i is not None:
-                    await self.music_controler.add_to_queue(ctx.guild.id, i)
-                else:
-                    return
-            embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"])
+        if not self.music_controler.is_vc(server_id=ctx.guild.id):
+            await self.music_controler.join_vc(server_id=ctx.guild.id, channel=ctx.author.voice.channel)
+        vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
+        for i in music_list:
+            if i is not None:
+                await self.music_controler.add_to_queue(ctx.guild.id, i)
+            else:
+                continue
+        embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"])
         await ctx.send(embed=embed)
         if not vc.is_playing():
             await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
@@ -1825,73 +1816,30 @@ class Music(commands.Cog):
         """Play-next une musique"""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            if not index and not musique_name:
-                return await ctx.send(QuestionnaireMusicPlay(custom_id="play-next"))
-            
-            if musique_name is not None:
-                index = musique_name
-
-            if ctx.channel.name != "musique":
-                embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
-                return await ctx.send(embed=embed)
-            
-            if ctx.author.voice is None: # Si le user nest dans aucun voocal
-                embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
-                return await ctx.send(embed=embed)
-
+            _musiques = await self.handler_music_input(index=index, musique_name=musique_name, channel_name=ctx.channel.name, author_id=ctx.author.id, author_voice=ctx.author.voice)
             messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
+            if isinstance(_musiques, discord.Embed):
+                return await ctx.send(embed=embed)
+            elif isinstance(_musiques, list):
+                messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
 
-            out = []
-            if is_comma_separated(index) is True:
-                wantedList, erreur = parse_user_indexs(index)
-                if erreur is not None:
-                    em_error = create_embed(title="Erreur", description=f"- Le numéro que tu as donné n'est pas bon.\n{erreur}", suggestions=["play","play-next","mlist"])
-                    return await ctx.send(embed=em_error)
-                for i in wantedList:
-                    if i is not None:
-                        out.append(await self.music_list_handler.getName(str(i)))
-                music_name = "Queue"
-            else: # pas de virgule
-                if "*" in index:
-                    tmp = []
-                    multiplicateur = int(index.split('*')[0])
-                    valeur = int(index.split('*')[1])
-                    tmp.extend([str(valeur)] * multiplicateur)
-                    for t in tmp:
-                        out.append(await self.music_list_handler.getName(str(t)))
-                else:
-                    out.append(await self.music_list_handler.getName(index))
-                    try:
-                        music_name = await self.music_list_handler.getName(str(index))
-                    except ValueError:
-                        return await ctx.send(embed=embed)
-                    if music_name == "Song not found.":
-                        return await ctx.send(embed=embed)
-
-            print("play-next Songs Name liste (out) = ", out)
-
-            for songName in out:
-                await FavSongsDbHandler(pool=self.bot.pool, song_name=songName, user_id=str(ctx.author.id))
-
-            if ctx.guild.id in self.music_controler.voice_clients:
+                if not self.music_controler.is_vc(server_id=ctx.guild.id):
+                    await self.music_controler.join_vc(server_id=ctx.guild.id, channel=ctx.author.voice.channel)
                 vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
-                for i in out:
+                for i in _musiques:
                     if i is not None:
-                        await self.music_controler.add_next_to_queue(ctx.guild.id, i)
+                        await self.music_controler.add_to_queue(ctx.guild.id, i)
                     else:
-                        return
-                embed = create_embed(title="Musique", description=f"`{out}` est/sont les prochaines musique à jouer.", suggestions=["queue","mlist","playlist-play"])
-            
-            else: # Need to connect 
-                embed = create_embed(title="Musique", description=f"Il semble qu'il n'y a aucune musique qui joue actuellement. Utilise /play à la place ! **BUICON**", suggestions=["play","mlist","playlist-play"])
-                return await ctx.send(embed=embed, view=view)
-            
-            
-            await ctx.send(embed=embed, view=view)
-            if not vc.is_playing():
-                await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
-            return
+                        continue
+                embed = create_embed(title="Musique", description=f"`{', '.join(_musiques)}` est/sont les prochaines musique à jouer.", suggestions=["queue","mlist","playlist-play"])
+                await ctx.send(embed=embed, view=view)
+                if not vc.is_playing():
+                    await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                return
+            elif isinstance(_musiques, QuestionnaireMusicPlay):
+                return await ctx.send(_musiques)
         except:
             LogErrorInWebhook()
 
