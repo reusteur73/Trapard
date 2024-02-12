@@ -222,16 +222,11 @@ class Rappels(commands.Cog):
     async def liste(self, ctx: commands.Context):
         """Affiche la liste de tes rappels."""
         try:
-            print(type(self.bot.db_conn))
-            print(1)
             rappels = await self.handler.get_all(ctx.author.id)
             if len(rappels) == 0:
                 return await ctx.send("Vous n'avez aucun rappel.")
-            print(2)
             rappels = sorted(rappels, key=lambda rappel: rappel[1])
-            print(3)
             rappels = [f"- {rappel[0]}: <t:{rappel[1]}:F> {rappel[2]}" for rappel in rappels]
-            print(4)
             return await ctx.send("\n".join(rappels))
         except Exception as e:
             print(e)
