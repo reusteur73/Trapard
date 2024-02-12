@@ -59,6 +59,190 @@ def format_duration2(duration_in_seconds):
     except Exception as e:
         LogErrorInWebhook()
 
+def draw_rank(niveau: str, messages: str, temps_vocal_tot: str, temps_total_vocal_auj: str, commandes: str, experience: str, name: str, avatar: Image.Image, fill: str = "#FFFFFF") -> BytesIO:
+
+    def draw_text(
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        coordinates: Tuple[int, int],
+        box_size: Tuple[int, int],
+        font: ImageFont.FreeTypeFont,
+        fill: str,
+    ) -> None:
+        text_width, text_height = draw.textlength(text, font=font), 24
+
+        coordinates = (
+            int(coordinates[0] + (box_size[0] - text_width) // 2),
+            int(coordinates[1] + (box_size[1] - text_height) // 2),
+        )
+
+        draw.text(
+            coordinates,
+            text,
+            font=font,
+            fill=fill,
+        )
+
+    def circular_crop(image: Image.Image) -> Image.Image:
+        """Crop an image into a circle with transparent background."""
+        mask = Image.new("L", image.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0) + image.size, fill=255)
+        mask = mask.resize(image.size)
+        # mask = mask.resize(image.size, Image.ANTIALIAS)
+        result = image.copy()
+        result.putalpha(mask)
+        return result
+    
+    img = Image.open(TRAPARDEUR_IMG)
+    avatar = circular_crop(avatar).resize((120, 120))
+    img.paste(avatar, (50, 24), avatar)
+
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(LOL_FONT, 18)
+
+    # Niveau
+    draw_text(draw=draw,text=niveau,coordinates=(250, 50),box_size=(166, 40),font=font,fill=fill)
+
+    # Messages
+    draw_text(draw=draw, text=messages, coordinates=(475, 50), box_size=(166, 40), font=font, fill=fill)
+
+    # Temps en vocal aujourd'hui
+    draw_text(draw=draw,text=temps_total_vocal_auj,coordinates=(692, 50),box_size=(200, 40),font=font,fill=fill)
+
+    # Temps total en vocal
+    draw_text(draw=draw,text=temps_vocal_tot,coordinates=(692, 156),box_size=(200, 40),font=font,fill=fill)
+
+    # Commandes
+    draw_text(draw=draw,text=commandes,coordinates=(460, 156),box_size=(200, 40),font=font,fill=fill)
+
+    # Expérience
+    draw_text(draw=draw,text=experience,coordinates=(232, 156),box_size=(200, 40),font=font,fill=fill)
+
+    # Pseudo
+    draw_text(draw=draw,text=name,coordinates=(15, 162),box_size=(200, 40),font=font,fill=fill)
+
+    def percentage(part: int, whole: int):
+        return 100 * part / whole
+
+    max_progress_width = 817
+    experience_needed_lvlup = 500
+
+    progress = percentage(int(experience), experience_needed_lvlup)
+    current_progress = min(progress, 100)
+
+    percentage_width = int(max_progress_width * (current_progress / 100))
+
+    draw.rounded_rectangle((50, 262, 52+percentage_width, 277), radius=25, fill=fill)
+
+    fp = BytesIO()
+    img.convert("RGBA").save(fp, "PNG")
+    return fp
+
+async def xp_calculation(user_id: str, bot: Trapard):
+    """
+        Calculate the xp of the user
+        Xp needed per level = 500
+        10 minutes of voice = 2 xp
+        1 message sent = 1 xp
+        1 command used = 1 xp
+    """
+    try:
+        handler = Trapardeur(pool=bot.pool, userId=user_id)
+        data = await handler.get()
+        xp = (data[0][2] * 2 / 600) + data[0][3] + data[0][4]
+        return xp
+    except Exception as e:
+        LogErrorInWebhook(error=f"[XP CALCULATION] {e} DATA={data}")
+
+def calculate_level(xp_total):
+    xp_needed_per_level = 500
+    return xp_total // xp_needed_per_level
+
+def create_image_with_color(color, width=200, height=200):
+    image = Image.new("RGB", (width, height), color)
+    return image
+
+async def translate1(text: str, *, src: str = 'auto', dest: str = 'fr', session: ClientSession):
+    # This was discovered by the people here:
+    # https://github.com/ssut/py-googletrans/issues/268
+    query = {
+        'dj': '1',
+        'dt': ['sp', 't', 'ld', 'bd'],
+        'client': 'dict-chrome-ex',
+        # Source Language
+        'sl': src,
+        # Target Language
+        'tl': dest,
+        # Query
+        'q': text,
+    }
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'
+    }
+
+    target_language = LANGUAGES.get(dest, 'Unknown')
+    
+    async with session.get('https://clients5.google.com/translate_a/single', params=query, headers=headers) as resp:
+        if resp.status != 200:
+            text = await resp.text()
+            raise TranslateError(resp.status, text)
+
+        data = await resp.json()
+        src = data.get('src', 'Unknown')
+        source_language = LANGUAGES.get(src, src)
+        sentences: list[TranslatedSentence] = data.get('sentences', [])
+        if len(sentences) == 0:
+            raise RuntimeError("Google traduction n'a pas renvoyé de phrases traduites.")
+
+        original = ''.join(sentence.get('orig', '') for sentence in sentences)
+        translated = ''.join(sentence.get('trans', '') for sentence in sentences)
+        return TranslateResult(
+            original=original,
+            translated=translated,
+            source_language=source_language,
+            target_language=target_language,
+        )
+
+async def handle_r34(bot: Trapard, userid: discord.User):
+    chann = bot.get_channel(1042529320675053598)
+    if chann:
+        user = bot.get_user(userid)
+        await command_counter(user_id=str(userid), bot=bot)
+        try:
+            embed = create_embed(title="Rule34", description="Chargement...")
+            origin = await chann.send(embed=embed)
+            tags, buffer, ext, img_url = await asyncio.wait_for(get_rule34_data(session=bot.session), timeout=30)
+            # save the image
+            if buffer:
+                if len(tags) < 1024:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags}```", "inline": False}]
+                if len(tags) > 1024 and len(tags) < 2048:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
+                                {"name": "Tags (suite, il y en a beaucoup X_X)", "value": f"```{tags[1024:]}```", "inline": False}]
+                if len(tags) > 2048:
+                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
+                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
+                                {"name": "Tags (suite il y en a beaucoup X_X)", "value": f"```{tags[1024:2048]}```", "inline": False},
+                                {"name": "Tags (suite, il y en vraiment a beaucoup X_X)", "value": f"```{tags[2048:]}```", "inline": False}]
+                file = discord.File(f"{R34_FOLDER}rule34.{ext}", filename=f"rule34.{ext}")
+                embed = create_embed(title="Rule34",description="", fields=fields)
+                embed.set_image(url=f"attachment://rule34.{ext}")
+                await origin.edit(embed=embed, attachments=[file], view=Rule34View(img_url=img_url, bot=bot))
+                return os.remove(f"{R34_FOLDER}rule34.{ext}")
+        except asyncio.TimeoutError:
+            return await origin.edit(content="La commande a pris trop de temps à s'exécuter.")
+        except urllib3.exceptions.MaxRetryError as e:
+            return await origin.edit(content="Une erreur s'est produite lors de l'exécution de la commande.")
+        except WebDriverException as e:
+            return await origin.edit(content=f"WebDriverException occurred: {e}")
+        except Exception as e:
+            await origin.edit(content=f"Erreur\n```{e}```")
+            await origin.edit(content=f"{traceback.format_exc()}")
+
 class Rule34View(discord.ui.View):
     def __init__(self, img_url: str, bot: Trapard):
         super().__init__(timeout=3200)
@@ -237,148 +421,6 @@ class songsStatsView(discord.ui.View):
             embed = create_embed(title=f"Musiques les plus skip par {self.bot.get_user(ctx.user.id).display_name}", description=fields)
             await message.edit(embed=embed, view=view)
 
-def draw_rank(niveau: str, messages: str, temps_vocal_tot: str, temps_total_vocal_auj: str, commandes: str, experience: str, name: str, avatar: Image.Image, fill: str = "#FFFFFF") -> BytesIO:
-
-    def draw_text(
-        draw: ImageDraw.ImageDraw,
-        text: str,
-        coordinates: Tuple[int, int],
-        box_size: Tuple[int, int],
-        font: ImageFont.FreeTypeFont,
-        fill: str,
-    ) -> None:
-        text_width, text_height = draw.textlength(text, font=font), 24
-
-        coordinates = (
-            int(coordinates[0] + (box_size[0] - text_width) // 2),
-            int(coordinates[1] + (box_size[1] - text_height) // 2),
-        )
-
-        draw.text(
-            coordinates,
-            text,
-            font=font,
-            fill=fill,
-        )
-
-    def circular_crop(image: Image.Image) -> Image.Image:
-        """Crop an image into a circle with transparent background."""
-        mask = Image.new("L", image.size, 0)
-        draw = ImageDraw.Draw(mask)
-        draw.ellipse((0, 0) + image.size, fill=255)
-        mask = mask.resize(image.size)
-        # mask = mask.resize(image.size, Image.ANTIALIAS)
-        result = image.copy()
-        result.putalpha(mask)
-        return result
-    
-    img = Image.open(TRAPARDEUR_IMG)
-    avatar = circular_crop(avatar).resize((120, 120))
-    img.paste(avatar, (50, 24), avatar)
-
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype(LOL_FONT, 18)
-
-    # Niveau
-    draw_text(draw=draw,text=niveau,coordinates=(250, 50),box_size=(166, 40),font=font,fill=fill)
-
-    # Messages
-    draw_text(draw=draw, text=messages, coordinates=(475, 50), box_size=(166, 40), font=font, fill=fill)
-
-    # Temps en vocal aujourd'hui
-    draw_text(draw=draw,text=temps_total_vocal_auj,coordinates=(692, 50),box_size=(200, 40),font=font,fill=fill)
-
-    # Temps total en vocal
-    draw_text(draw=draw,text=temps_vocal_tot,coordinates=(692, 156),box_size=(200, 40),font=font,fill=fill)
-
-    # Commandes
-    draw_text(draw=draw,text=commandes,coordinates=(460, 156),box_size=(200, 40),font=font,fill=fill)
-
-    # Expérience
-    draw_text(draw=draw,text=experience,coordinates=(232, 156),box_size=(200, 40),font=font,fill=fill)
-
-    # Pseudo
-    draw_text(draw=draw,text=name,coordinates=(15, 162),box_size=(200, 40),font=font,fill=fill)
-
-    def percentage(part: int, whole: int):
-        return 100 * part / whole
-
-    max_progress_width = 817
-    experience_needed_lvlup = 500
-
-    progress = percentage(int(experience), experience_needed_lvlup)
-    current_progress = min(progress, 100)
-
-    percentage_width = int(max_progress_width * (current_progress / 100))
-
-    draw.rounded_rectangle((50, 262, 52+percentage_width, 277), radius=25, fill=fill)
-
-    fp = BytesIO()
-    img.convert("RGBA").save(fp, "PNG")
-    return fp
-
-async def xp_calculation(user_id: str, bot: Trapard):
-    """
-        Calculate the xp of the user
-        Xp needed per level = 500
-        10 minutes of voice = 2 xp
-        1 message sent = 1 xp
-        1 command used = 1 xp
-    """
-    try:
-        handler = Trapardeur(pool=bot.pool, userId=user_id)
-        data = await handler.get()
-        xp = (data[0][2] * 2 / 600) + data[0][3] + data[0][4]
-        return xp
-    except Exception as e:
-        LogErrorInWebhook(error=f"[XP CALCULATION] {e} DATA={data}")
-
-def calculate_level(xp_total):
-    xp_needed_per_level = 500
-    return xp_total // xp_needed_per_level
-
-def create_image_with_color(color, width=200, height=200):
-    image = Image.new("RGB", (width, height), color)
-    return image
-
-async def handle_r34(bot: Trapard, userid: discord.User):
-    chann = bot.get_channel(1042529320675053598)
-    if chann:
-        user = bot.get_user(userid)
-        await command_counter(user_id=str(userid), bot=bot)
-        try:
-            embed = create_embed(title="Rule34", description="Chargement...")
-            origin = await chann.send(embed=embed)
-            tags, buffer, ext, img_url = await asyncio.wait_for(get_rule34_data(session=bot.session), timeout=30)
-            # save the image
-            if buffer:
-                if len(tags) < 1024:
-                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
-                                {"name": "Tags", "value": f"```{tags}```", "inline": False}]
-                if len(tags) > 1024 and len(tags) < 2048:
-                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
-                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
-                                {"name": "Tags (suite, il y en a beaucoup X_X)", "value": f"```{tags[1024:]}```", "inline": False}]
-                if len(tags) > 2048:
-                    fields = [{"name": "Lancé par", "value": f"{user.display_name}", "inline": False},
-                                {"name": "Tags", "value": f"```{tags[:1024]}```", "inline": False},
-                                {"name": "Tags (suite il y en a beaucoup X_X)", "value": f"```{tags[1024:2048]}```", "inline": False},
-                                {"name": "Tags (suite, il y en vraiment a beaucoup X_X)", "value": f"```{tags[2048:]}```", "inline": False}]
-                file = discord.File(f"{R34_FOLDER}rule34.{ext}", filename=f"rule34.{ext}")
-                embed = create_embed(title="Rule34",description="", fields=fields)
-                embed.set_image(url=f"attachment://rule34.{ext}")
-                await origin.edit(embed=embed, attachments=[file], view=Rule34View(img_url=img_url, bot=bot))
-                return os.remove(f"{R34_FOLDER}rule34.{ext}")
-        except asyncio.TimeoutError:
-            return await origin.edit(content="La commande a pris trop de temps à s'exécuter.")
-        except urllib3.exceptions.MaxRetryError as e:
-            return await origin.edit(content="Une erreur s'est produite lors de l'exécution de la commande.")
-        except WebDriverException as e:
-            return await origin.edit(content=f"WebDriverException occurred: {e}")
-        except Exception as e:
-            await origin.edit(content=f"Erreur\n```{e}```")
-            await origin.edit(content=f"{traceback.format_exc()}")
-
 class TranslateError(Exception):
     def __init__(self, status_code: int, text: str) -> None:
         self.status_code: int = status_code
@@ -418,7 +460,6 @@ class PierreFeuilleCiseauxGame(discord.ui.View):
         """
         input is one of this: ["pierre","feuille","ciseaux"]
         """
-        print(p1_bet, p2_bet)
         if p1_bet == p2_bet:
             return None  # Il y a égalité, donc pas de gagnant
         
@@ -1157,48 +1198,6 @@ class AttenteJoueur(discord.ui.View):
                     embed = create_embed(title="Pierre-feuille-ciseaux", description=f"- <@{self.ctx.author.id}> a lancé une partie de Pierre-feuille-ciseaux !\n\n- Clique sur le bouton « `Rejoindre` » pour jouer avec lui :\n\n- `❌` <@{self.ctx.author.id}> Tu ne peux pas rejoindre ta propre partie **BUICON**")
                 await interaction.message.edit(embed=embed, view=view2)
 
-async def translate1(text: str, *, src: str = 'auto', dest: str = 'fr', session: ClientSession) -> TranslateResult:
-    # This was discovered by the people here:
-    # https://github.com/ssut/py-googletrans/issues/268
-    query = {
-        'dj': '1',
-        'dt': ['sp', 't', 'ld', 'bd'],
-        'client': 'dict-chrome-ex',
-        # Source Language
-        'sl': src,
-        # Target Language
-        'tl': dest,
-        # Query
-        'q': text,
-    }
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'
-    }
-
-    target_language = LANGUAGES.get(dest, 'Unknown')
-    
-    async with session.get('https://clients5.google.com/translate_a/single', params=query, headers=headers) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            raise TranslateError(resp.status, text)
-
-        data = await resp.json()
-        src = data.get('src', 'Unknown')
-        source_language = LANGUAGES.get(src, src)
-        sentences: list[TranslatedSentence] = data.get('sentences', [])
-        if len(sentences) == 0:
-            raise RuntimeError("Google traduction n'a pas renvoyé de phrases traduites.")
-
-        original = ''.join(sentence.get('orig', '') for sentence in sentences)
-        translated = ''.join(sentence.get('trans', '') for sentence in sentences)
-        return TranslateResult(
-            original=original,
-            translated=translated,
-            source_language=source_language,
-            target_language=target_language,
-        )
-
 class hexcodleView(discord.ui.View):
     def __init__(self, reponse: str, ctx: discord.Interaction,bot:Trapard, is_color: str = None, rejouer : bool = False, original_message: int = None):
         super().__init__(timeout=500)
@@ -1254,6 +1253,54 @@ class hexcodleView(discord.ui.View):
             return await play_hexcodle(ctx=interaction, bot=self.bot)
     async def on_timeout(self):
         return await self.ctx.edit_original_response(view=None)
+
+class CringédexView(discord.ui.View):
+    def __init__(self, ctx: discord.Interaction, user: discord.User, cringeList: list):
+        super().__init__(timeout=1000)
+        self.ctx = ctx
+        self.user = user
+        self.cringeList = cringeList
+        self.current_page = 0
+        self.max_pages = len(self.cringeList)
+        self.embed = discord.Embed(title=f"Cringédex de {self.user.display_name}", description=f"Page {self.current_page+1}/{self.max_pages}")
+        self.embed.set_image(url=self.cringeList[self.current_page])
+        self.message = None
+
+        self.prec = discord.ui.Button(label="Précédent", style=discord.ButtonStyle.blurple, emoji="⬅️", custom_id="previous")
+        self.add_item(self.prec)
+        self.prec.callback = lambda interaction=self.ctx, button=self.prec: self.on_button_click(interaction, button)
+        
+        self.suiv = discord.ui.Button(label="Suivant", style=discord.ButtonStyle.blurple, emoji="➡️", custom_id="next")
+        self.add_item(self.suiv)
+        self.suiv.callback = lambda interaction=self.ctx, button=self.suiv: self.on_button_click(interaction, button)
+
+        self.ferm = discord.ui.Button(label="Fermer", style=discord.ButtonStyle.red, emoji="🚫", custom_id="close")
+        self.add_item(self.ferm)
+        self.ferm.callback = lambda interaction=self.ctx, button=self.ferm: self.on_button_click(interaction, button)
+    
+    async def on_timeout(self):
+        try:
+            await self.message.edit(view=None)
+        except:
+            pass
+
+    async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if button.custom_id == "previous":
+            self.current_page -= 1
+            if self.current_page < 0:
+                self.current_page = self.max_pages - 1
+            self.embed.set_image(url=self.cringeList[self.current_page])
+            self.embed.description = f"Page {self.current_page+1}/{self.max_pages}"
+            await interaction.response.edit_message(embed=self.embed, view=self)
+        elif button.custom_id == "next":
+            self.current_page += 1
+            if self.current_page > self.max_pages - 1:
+                self.current_page = 0
+            self.embed.set_image(url=self.cringeList[self.current_page])
+            self.embed.description = f"Page {self.current_page+1}/{self.max_pages}"
+            await interaction.response.edit_message(embed=self.embed, view=self)
+        elif button.custom_id == "close":
+            await interaction.response.edit_message(view=None)
 
 class Misc(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
@@ -1646,10 +1693,39 @@ class Misc(commands.Cog):
         final_url = f'<{source_url}/blob/{branch}/{location}#L{firstlineno}-L{firstlineno + len(lines) - 1}>'
         await ctx.send(final_url)
 
-    @commands.hybrid_command(name="rule34", aliases=["r34"])
+    @commands.hybrid_command(name="rule34", aliases=["r34"], nsfw=True)
     async def rule34(self, ctx: commands.Context):
         if ctx.channel.name == "cringe":
             return await handle_r34(bot=self.bot, userid=ctx.author.id)
+
+    @commands.hybrid_command(name="cringédex", nsfw=True)
+    async def cringedex(self, ctx: commands.Context, user: discord.User = None):
+        """Affiche le cringédex d'un utilisateur."""
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            if ctx.channel.name != "cringe":
+                embed = create_embed(title="Cringédex", description="Merci d'utiliser cette commande dans le channel <#1042529320675053598>.")
+                return await ctx.send(embed=embed, ephemeral=True)
+            if not user:
+                userID = str(ctx.author.id)
+                user = ctx.author
+            else: userID = str(user.id)
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchone(f"SELECT cringeList FROM cringedex WHERE userId = ?", (userID,))
+            if data is None:
+                embed = create_embed(title="Cringédex", description=f"<@{userID}> n'a pas de cringédex !")
+                return await ctx.send(embed=embed)
+            else:
+                cringeList = data[0]
+                json_ = json.loads(cringeList)
+                cringeList = []
+                for i in json_:
+                    cringeList.append(i)
+                embed = discord.Embed(title=f"Cringédex de {user.display_name}", description=f"Page 1/{len(cringeList)}")
+                embed.set_image(url=cringeList[0])
+                return await ctx.send(f"<@{userID}>", view=CringédexView(ctx=ctx, user=user, cringeList=cringeList), embed=embed)
+        except Exception as e:
+            LogErrorInWebhook()
 
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     
