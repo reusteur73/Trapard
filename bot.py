@@ -87,6 +87,8 @@ class Trapard(commands.Bot):
         self.last_music = {}
         self.unique_downloader_display_names = {}
 
+        self.debug = False
+
         #Gambling user lock
         self.user_locks = {}
         self.zigotos = {
