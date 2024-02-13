@@ -5,7 +5,7 @@ from .utils.functions import LogErrorInWebhook, format_duration, load_json_data,
 from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur
 from .utils.context import Context
-from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH,R34_FOLDER
+from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH,R34_FOLDER, MAIN_DIR
 from discord.ext import commands
 from typing_extensions import Annotated
 from typing import Optional, NamedTuple, TypedDict, Tuple, Literal
@@ -21,6 +21,7 @@ from pyvirtualdisplay import Display
 from asyncio import sleep
 from bot import Trapard, DB_PATH
 from aiohttp import ClientSession
+from asqlite import Pool
 from datetime import datetime
 from TTS.api import TTS
 import pytz
@@ -243,6 +244,52 @@ async def handle_r34(bot: Trapard, userid: discord.User):
             await origin.edit(content=f"Erreur\n```{e}```")
             await origin.edit(content=f"{traceback.format_exc()}")
 
+async def save_song_stats(pool: Pool, time: int, number: int):
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE songs_stats SET time = time + %s, number = number + %s WHERE id = 1", (time, number,))
+    return
+
+async def get_song_stats(pool: Pool):
+    """Return `tuple` time, number"""
+    async with pool.acquire() as conn:
+        data = await conn.fetchone("SELECT time, number FROM songs_stats WHERE id = 1")
+    if data:
+        return int(data[0]), int(data[1])
+    return "Error"
+
+async def some_more_stats(session: ClientSession):
+    async def get_commit_count(access_token=None):
+        url = f"https://api.github.com/repos/reusteur73/Trapard/commits"
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with session.get(url, headers=headers) as resp:
+            commits = await resp.json()
+            return len(commits)
+    access_token = os.environ.get("GITHUB_API")
+    commit_count = await get_commit_count(access_token)
+    text = ""
+    if commit_count is not None:
+        text += f"Nombre total de commits GitHub: {commit_count}.\n"
+    def count_lines(file_path):
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return sum(1 for line in file)
+    def count_lines_in_directory(directory):
+        total_lines = 0
+
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    total_lines += count_lines(file_path)
+        return total_lines
+    folder = MAIN_DIR
+    total_lines = count_lines_in_directory(folder)
+    text += f"Le nombre total de lignes dans le projet est : {total_lines}"
+    return text
+
 class Rule34View(discord.ui.View):
     def __init__(self, img_url: str, bot: Trapard):
         super().__init__(timeout=3200)
@@ -322,38 +369,16 @@ class songsStatsView(discord.ui.View):
         except:
             pass
         user_id = interaction.user.id
-        await self.bot.cursor.execute(f"SELECT * FROM FavSongs WHERE userId = {user_id}")
-        data = await self.bot.cursor.fetchall()
-        if data == []:
-            embed = create_embed(title="Musiques favorites", description=f"Tu n'as pas encore de musiques favorites.")
-            return await interaction.followup.send(embed=embed)
-        else:
-            # Send top 25 fav songs
-            fields = f"```{printFormat('N°', 4)}|{printFormat('Nom de la musique',30)}|{printFormat('Nombre de fois joué', 3)}\n"
-            fields += "----|-------------------|--------------------\n"
-
-            data = sorted(data, key=lambda x: x[3], reverse=True)
-            for i in range(25):
-                try:
-                    fields += f"{printFormat(str(i+1), 4)}|{printFormat(data[i][2], 30)}|{printFormat(str(data[i][3]), 3)}\n"
-                except IndexError:
-                    pass
-            fields += "```"
-            view=SelectFavSongUser()
-            embed = create_embed(title=f"Musiques favorites de {interaction.user.display_name}", description=fields)
-            message = await interaction.followup.send(embed=embed, view=view, wait=True)
-            while view.selected is None:
-                await sleep(0.1)
-            user_id = view.selected[0]
-            await self.bot.cursor.execute(f"SELECT * FROM FavSongs WHERE userId = {user_id}")
-            data = await self.bot.cursor.fetchall()
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall(f"SELECT * FROM FavSongs WHERE userId = ?",(user_id,))
             if data == []:
                 embed = create_embed(title="Musiques favorites", description=f"Tu n'as pas encore de musiques favorites.")
-                await message.edit(embed=embed, view=view)
+                return await interaction.followup.send(embed=embed)
             else:
                 # Send top 25 fav songs
                 fields = f"```{printFormat('N°', 4)}|{printFormat('Nom de la musique',30)}|{printFormat('Nombre de fois joué', 3)}\n"
                 fields += "----|-------------------|--------------------\n"
+
                 data = sorted(data, key=lambda x: x[3], reverse=True)
                 for i in range(25):
                     try:
@@ -361,16 +386,36 @@ class songsStatsView(discord.ui.View):
                     except IndexError:
                         pass
                 fields += "```"
-                embed = create_embed(title=f"Musiques favorites de {self.bot.get_user(user_id).display_name}", description=fields)
-                await message.edit(embed=embed, view=view)
+                view=SelectFavSongUser()
+                embed = create_embed(title=f"Musiques favorites de {interaction.user.display_name}", description=fields)
+                message = await interaction.followup.send(embed=embed, view=view, wait=True)
+                while view.selected is None:
+                    await sleep(0.1)
+                user_id = view.selected[0]
+                data = await conn.fetchall(f"SELECT * FROM FavSongs WHERE userId = ?",(user_id,))
+        if data == []:
+            embed = create_embed(title="Musiques favorites", description=f"Tu n'as pas encore de musiques favorites.")
+            await message.edit(embed=embed, view=view)
+        else:
+            # Send top 25 fav songs
+            fields = f"```{printFormat('N°', 4)}|{printFormat('Nom de la musique',30)}|{printFormat('Nombre de fois joué', 3)}\n"
+            fields += "----|-------------------|--------------------\n"
+            data = sorted(data, key=lambda x: x[3], reverse=True)
+            for i in range(25):
+                try:
+                    fields += f"{printFormat(str(i+1), 4)}|{printFormat(data[i][2], 30)}|{printFormat(str(data[i][3]), 3)}\n"
+                except IndexError:
+                    pass
+            fields += "```"
+            embed = create_embed(title=f"Musiques favorites de {self.bot.get_user(user_id).display_name}", description=fields)
+            await message.edit(embed=embed, view=view)
 
     @discord.ui.button(label='Musiques les plus jouées', style=discord.ButtonStyle.blurple)
     async def most_played_songs(self, ctx: discord.Interaction, button: discord.ui.Button):
         try: await ctx.response.defer()
         except: pass
-        # sqlite3 db open
-        await self.bot.cursor.execute(f"SELECT songName, count FROM SongPlayedCount")
-        data = await self.bot.cursor.fetchall()
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT songName, count FROM SongPlayedCount")        
         if data == []:
             embed = create_embed(title="Most-played-songs", description=f"Il n'y a pas encore de musiques favorites.")
             return await ctx.followup.send(embed=embed)
@@ -398,8 +443,8 @@ class songsStatsView(discord.ui.View):
     async def most_skipped_songs(self, ctx: discord.Interaction, button: discord.ui.Button):
         try: await ctx.response.defer()
         except: pass
-        await self.bot.cursor.execute(f"SELECT songName, count FROM SkippedSongs")
-        data = await self.bot.cursor.fetchall()
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT songName, count FROM SkippedSongs")
         view=SelectSkipSongUser()
         message = await ctx.followup.send("Patientez...", view=view, wait=True)
         if data == []:
@@ -1306,46 +1351,34 @@ class Misc(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
         self.bot = bot
     
-    @discord.utils.cached_property
-    def replied_message(self) -> Optional[discord.Message]:
-        ref = self.message.reference
-        if ref and isinstance(ref.resolved, discord.Message):
-            return ref.resolved
-        return None
-
     @commands.hybrid_command(aliases=['music-stats', "statistique", "db-stats", "statistiques"])
     async def stats(self, ctx: commands.Context):
         """Affiche différentes stats sur Trapard!"""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            data = load_json_data(item="song-stats")
-            duration = data['time']
-            numPlayed = data['number-played']
+            duration, numPlayed = await get_song_stats(pool=self.bot.pool)
             duration = format_duration(duration)
             async def get_database_info():
-                await self.bot.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                tables = await self.bot.cursor.fetchall()
-                info_string = ""
-                tot = 0
-                for i, table in enumerate(tables):
-                    table_name = table[0]
+                async with self.bot.pool.acquire() as conn:
+                    tables = await conn.fetchall("SELECT name FROM sqlite_master WHERE type='table'")
+                    info_string = ""
+                    tot = 0
+                    for i, table in enumerate(tables):
+                        table_name = table[0]
 
-                    await self.bot.cursor.execute(f"SELECT COUNT(*) FROM {table_name};")
-                    entry_count = await self.bot.cursor.fetchone()[0]
-
-                    info_string += f"- table {i+1}: **{entry_count}** entrées.\n"
-                    tot += entry_count
+                        data = await conn.fetchone(f"SELECT COUNT(*) FROM {table_name};")
+                        info_string += f"- table {i+1}: **{data[0]}** entrées.\n"
+                        tot += data[0]
 
                 total_size = os.path.getsize(DB_PATH) / 1024.0 ** 2
-
-                await self.bot.cursor.execute("SELECT COUNT(*) FROM (SELECT * FROM sqlite_master UNION ALL SELECT * FROM sqlite_temp_master);")
-
                 info_string += f"\nTaille totale de la base de données: **{total_size} Mo**.\nNombre total d'entrées: **{tot}**."
                 return info_string
             
+            more = await some_more_stats(session=self.bot.session)
             fields = []
             fields.append({"name": "La base de données", "value": await get_database_info(), "inline": True})
             fields.append({"name": "La musique", "value": f"`Nombre de musiques jouées` : **{numPlayed}**\n`Temps de musique jouée` : **{duration}**", "inline": True})
+            fields.append({'name': 'Le code','value': f'{more}', "inline": True})
             embed = create_embed(title="Les statistiques de Trapard", description="", fields=fields)
             return await ctx.send(embed=embed,view=songsStatsView(ctx=ctx, bot=self.bot))
         except Exception as e:
