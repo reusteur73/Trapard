@@ -1058,10 +1058,7 @@ class MusicController():
                 traceback.print_exc()
             try:
                 if current_song_time > 8:
-                    data = load_json_data(item="song-stats")
-                    duration = data['time'] + current_song_time
-                    num = data['number-played'] + 1
-                    write_item(item="song-stats",values={"time": duration, "number-played": num})
+                    await self.save_song_stats(current_song_time, 1)
                     await IncrementMusicPlayed(TrackName=track, pool=self.bot.pool)
             except Exception as e:
                 LogErrorInWebhook()
@@ -1125,7 +1122,21 @@ class MusicController():
             if not self.is_vc(server_id):
                 vc = await channel.connect()
                 self.voice_clients[server_id] = vc
+        
+        async def save_song_stats(self, time: int, number: int):
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("UPDATE songs_stats SET time = time + %s, number = number + %s WHERE id = 1", (time, number,))
+            return
 
+        async def get_song_stats(self):
+            """Return `tuple` time, number"""
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchone("SELECT time, number FROM songs_stats WHERE id = 1")
+            if data:
+                return int(data[0]), int(data[1])
+            return "Error"
+    
     except Exception as e:
         LogErrorInWebhook()
 
