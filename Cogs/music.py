@@ -1536,7 +1536,7 @@ class PlayAllMoreOptions(discord.ui.View):
         self.btn = discord.ui.Button(label=f"Inclure des utilisateurs", custom_id=f"include", style=discord.ButtonStyle.green)
         self.add_item(self.btn)
         self.btn.callback = lambda interaction=self.ctx, button=self.btn: self.on_button_click(interaction, button)
-
+ 
         self.btn1 = discord.ui.Button(label=f"Exclure des utilisateurs", custom_id=f"exclude", style=discord.ButtonStyle.red)
         self.add_item(self.btn1)
         self.btn1.callback = lambda interaction=self.ctx, button=self.btn1: self.on_button_click(interaction, button)
