@@ -1,4 +1,4 @@
-import discord, os, datetime, io
+import discord, os, datetime, io, threading, asyncio
 from discord.ext import commands, tasks
 from typing import TYPE_CHECKING, Tuple
 from PIL import ImageDraw, ImageFont, Image
@@ -49,7 +49,7 @@ class LolGames(commands.Cog):
                 for row in data:
                     print(dict(row))
 
-            def draw_game(pseudo: str, rank: str, gameMode: str, championIcon, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, items: list, players: list, results: list, bans: list):
+            def draw_game(pseudo: str, rank: str, gameMode: str, championIcon, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, items: list, players: list, results: list, bans: list, mentions: str):
                 def draw_text(
                     draw: ImageDraw.ImageDraw,
                     text: str,
@@ -364,12 +364,11 @@ class LolGames(commands.Cog):
                                 ban = ban.resize((26, 26))
                                 img.paste(ban, (62+422+70+26+sep+(l_step*i), 400-7), ban)
                             except: continue
-
-
                 # Saving image
                 fp = io.BytesIO()
                 img.convert("RGBA").save(fp, "PNG")
-                return fp
+                img.save(f"{FILES_PATH}{mentions}-game.png")
+                return
             
             def rang_le_plus_eleve(liste_rangs):
                 rangs_possibles = [
@@ -812,13 +811,10 @@ class LolGames(commands.Cog):
                                         text += f"\n- {texte_to_send}"
                                     text += f"\n- Bonus tier: {display_big_nums(tier_bonus)} {str(trapcoins_emoji)} || ({afficher_nombre_fr(tier_bonus)} {str(trapcoins_emoji)}) ||"                  
                                     channel = self.bot.get_channel(1112233401286672394)
-                                    embed1 = create_embed(title="LoL Trapcoins", description=text)
                                     api_version = await getLastVersion()
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
                                     output, results, bans = await get_game_data(raw_data, api_version)
-                                    image = draw_game(pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, output, results, bans)
-                                    img = Image.open(image)
-                                    img.save(f"{FILES_PATH}{mentions}-game.png")
+                                    await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, output, results, bans, mentions)
                                     file = discord.File(f"{FILES_PATH}{mentions}-game.png", filename=f"Game.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
                                     embed.set_image(url=f"attachment://Game.png")
