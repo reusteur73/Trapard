@@ -1126,7 +1126,7 @@ class MusicController():
         async def save_song_stats(self, time: int, number: int):
             async with self.bot.pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE songs_stats SET time = time + %s, number = number + %s WHERE id = 1", (time, number,))
+                    await conn.execute("UPDATE songs_stats SET time = time + ?, number = number + ? WHERE id = 1", (time, number,))
             return
 
         async def get_song_stats(self):
@@ -1745,13 +1745,19 @@ class SoundBoardManage:
     
     async def get_all_sounds_name(self):
         async with self.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT name FROM soundboard")
+            data = await conn.fetchall("SELECT name, id FROM soundboard")
         if data:
             out = []
             for sound in data:
-                out.append(sound[0])
+                out.append(f"{sound[0]} ({sound[1]})")
             return out
         else: return None
+
+    async def delete_sound(self, id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM soundboard WHERE id = ?", (id,))
+        return True
 
 class SoundBoardDropDown(discord.ui.Select):
     try:
@@ -2389,62 +2395,27 @@ class Music(commands.Cog):
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if playlistname not in playlist_names:
-                return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)
-            params = melange
-            if params:
-                shuffle = True
-                embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue en aléatoire !")
-            else:
-                shuffle = False
-                embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue dans l'ordre !")
+                return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)                 
             messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, bot=self.bot,music_session = self.music_session, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
-            if ctx.author.voice is None: # Si le user nest dans aucun voocal
-                await ctx.send("Vous n'êtes pas dans un channel vocal, **BUICON**.", ephemeral=True)
-                return
-            user_vocal = ctx.author.voice.channel
-            server_id = ctx.guild.id
-            vocal = ctx.guild.voice_client
-            playliste_name_val = playlistname
-            musicList = getMusicList(playliste_name_val)
+            if ctx.author.voice is None:
+                return await ctx.send("Vous n'êtes pas dans un channel vocal, **BUICON**.", ephemeral=True)
+            musicList = getMusicList(playlistname)
             if musicList is None:
-                return await ctx.send(f"La playlist : `{playliste_name_val}` ne semble pas exister !", ephemeral=True)
-            if ctx.guild.id in self.music_controler.voice_clients:
-                if not shuffle:
-                    vc = user_vocal.connect()
-                    for music in musicList:
-                        await self.music_controler.add_to_queue(server_id, music)
-                    await ctx.send(embed=embed,view=view)
-                    return
-                else:
-                    random.shuffle(musicList)
-                    vc = user_vocal.connect()
-                    for music in musicList:
-                        await self.music_controler.add_to_queue(server_id, music)
-                    await ctx.send(embed=embed,view=view)
-                    return
-            else:
-                if not shuffle:
-                    vc = await user_vocal.connect()
-                    self.music_controler.voice_clients[server_id] = vc
-                    for music in musicList:
-                        await self.music_controler.add_to_queue(server_id, music)
-                    await ctx.send(embed=embed,view=view)
-                    try:
-                        await self.music_controler.play_music(server_id, vc=vc)
-                    except discord.errors.ClientException:
-                        embed = create_embed(title="Musique", description="Il semble que je suis déjà connecté à ce vocal.")
-                        return await ctx.send(embed=embed,view=view)
-                    return
-                else:
-                    random.shuffle(musicList)
-                    vc = await user_vocal.connect()
-                    self.music_controler.voice_clients[server_id] = vc
-                    for music in musicList:
-                        await self.music_controler.add_to_queue(server_id, music)
-                    await ctx.send(embed=embed,view=view)
-                    await self.music_controler.play_music(server_id, vc=vc)
-                    return
+                return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)
+            if not self.music_controler.is_vc(server_id=ctx.guild.id):
+                await self.music_controler.join_vc(server_id=ctx.guild.id, channel=ctx.author.voice.channel)
+            vc: discord.VoiceClient = self.music_controler.voice_clients[ctx.guild.id]
+            if melange:
+                embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue en aléatoire !")
+                random.shuffle(musicList)
+            else: 
+                embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue dans l'ordre !")
+            for music in musicList:
+                await self.music_controler.add_to_queue(ctx.guild.id, music)
+            if not vc.is_playing(): 
+                await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+            return await ctx.send(embed=embed,view=view)
         except Exception as e:
             LogErrorInWebhook()
 
@@ -2656,13 +2627,14 @@ class Music(commands.Cog):
 # SoundBoard
     @commands.hybrid_command(name="soundboard", aliases=["sb"])
     async def soundboard(self, ctx: commands.Context):
+        """Affiche les sons de la soundboard."""
         try:
             async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall(f"SELECT name FROM soundboard")
+                data = await conn.fetchall(f"SELECT name, id FROM soundboard")
             if data:
                 output = []
                 for sound in data: 
-                    output.append(discord.ui.Button(label=sound[0], style=discord.ButtonStyle.blurple, custom_id=sound[0]))
+                    output.append(discord.ui.Button(label=f'{sound[0]} ({sound[1]})', style=discord.ButtonStyle.blurple, custom_id=sound[0]))
                 sounds = [output[i:i + 20] for i in range(0, len(output), 20)] # list of list of 20 btns
                 view = SoundBoardView(sounds=sounds, ctx=ctx, music_controler=self.music_controler, bot=self.bot)
                 embed = create_embed(title="SoundBoard", description=f"Page 1/{len(sounds)}")
@@ -2750,6 +2722,17 @@ class Music(commands.Cog):
                     return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer.", ephemeral=True)
         except Exception as e:
             LogErrorInWebhook()
+
+    @commands.hybrid_command(name="soundboard-delete", aliases=["sbdel"])
+    @app_commands.describe(id = "Le numéro du son à supprimer.")
+    async def soundboard_delete(self, ctx: commands.Context, id: int):
+        """Supprime le son correspondant à l'id."""
+        if id:
+            mng = SoundBoardManage(pool=self.bot.pool)
+            await mng.delete_sound(id)
+            embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** a bien été supprimé.")
+        else: embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** semble ne pas exister...")
+        return await ctx.send(embed=embed)
 
 async def setup(bot: Trapard):
     await bot.add_cog(Music(bot))
