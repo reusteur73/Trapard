@@ -912,17 +912,14 @@ class MusicController():
 
         async def play_music(self, server_id: int, vc: discord.VoiceClient):
             if server_id not in self.voice_clients:
-                # Return an error message or raise an exception if the bot is not connected to a voice channel for this server
                 return "Je ne suis pas connecté à un canal vocal pour ce serveur."
             vc = self.voice_clients[server_id]
             if len(self.bot.music_queues[server_id]) == 0:
-                # Return an error message or raise an exception if there are no songs in the queue
                 return "Il n'y a pas de musique dans la file d'attente."
             name = self.bot.music_queues[server_id].pop(0)
             if name is not False:
                 music_path = MUSICS_FOLDER + name + ".mp3"
             else:
-                # Return an error message or raise an exception if the song does not exist
                 return "La musique n'existe pas."
             
             if server_id not in self.bot.current_track:
@@ -930,7 +927,7 @@ class MusicController():
             else:
                 self.bot.current_track[server_id] = name
             if server_id not in self.music_session:
-                self.music_session[server_id] = {'music_played': 0, 'time': 0}
+                self.music_session[server_id] = {'music_played': 0, 'time': 0, 'paused': {'status': False, 'sound_time': 0}}
 
             self.current_song[server_id] = music_path
 
@@ -993,12 +990,26 @@ class MusicController():
             except Exception as e:
                 LogErrorInWebhook()
             start_time = perf_counter()
+            reducer = 0
             pourcent_em = "<:percent:1125746991247409202>"
             while vc.is_playing():
+                while self.music_session[server_id]['paused']['status'] == True:
+                    txt = f"Lecture en pause par la SoundBoard pour {self.music_session[server_id]['paused']['sound_time']} secondes!"
+                    embed = create_embed(title=f"Musique actuelle 🎜 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {hypno_emoji}\n\n{convert_txt_to_colored(text=txt, color='red', background='dark')}{field}")    
+                    await self.current_song_pbar.edit(embed=embed, view=view)
+                    self.music_session[server_id]['paused']['sound_time'] -= 1
+                    await asyncio.sleep(1)
+                    reducer += 1
+                    if reducer >= 30:
+                        self.music_session[server_id]['paused']['status'] == False
+                        break
                 view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
                 await sleep(0.55)
                 time_old += 1
                 current_time = perf_counter() - start_time
+                if reducer > 0:
+                    current_time -= reducer
+                    # reducer = 0
                 self.current_song_status[server_id]['c_time'] = int(current_time)
                 pourcent =  str(int(current_time * 100 / int(track_duration)))
                 current_song_time = int(current_time)
@@ -1249,6 +1260,10 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
             self.add_item(self.prev_song_btn)
             self.prev_song_btn.callback = lambda interaction=self.ctx, button=self.prev_song_btn: self.on_button_click(interaction, button)
 
+            self.sb_btn = discord.ui.Button(label="Menu SoundBoard", style=discord.ButtonStyle.green, emoji="🔊", custom_id="sb", row=0)
+            self.add_item(self.sb_btn)
+            self.sb_btn.callback = lambda interaction=self.ctx, button=self.sb_btn: self.on_button_click(interaction, button)
+
             # Skip BTN
             if (self.serverid in self.bot.music_queues) and (len(self.bot.music_queues[self.serverid]) >= 1):
                 self.skip_btn = discord.ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0)
@@ -1345,7 +1360,8 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
                 vc.stop()
                 embed = create_embed(title="Musique", description=f"La musique `{mu}` a été passé par <@{interaction.user.id}>, afin de jouer la musique précédente `{self.bot.last_music[self.serverid]}`.", suggestions=["mlist","play", "search"])
                 return await interaction.followup.send(embed=embed)
-    
+            elif button.custom_id == "sb":
+                return await handle_sb(ctx=interaction, bot=self.bot, music_controler=self.music_controler, userId=interaction.user.id)
         async def on_timeout(self):
             try: return await self.ctx.edit_original_response(view=None)
             except: pass
@@ -1382,35 +1398,33 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
 
             added_musics_len = 0
 
-            if ctx.guild.id in music_controler.voice_clients: # BOT ALREADY IN VOCAL
-                vc: discord.VoiceClient = music_controler.voice_clients[ctx.guild.id]
-            else: 
+            if ctx.guild.id not in music_controler.voice_clients:
                 await music_controler.join_vc(server_id=ctx.guild.id, channel=user_vocal)
-                vc: discord.VoiceClient = music_controler.voice_clients[server_id]
-                if shuffle:
-                    random.shuffle(musicList)
-                for music in musicList:
-                    if include is not None:
-                        ___, dler = await music_list_handler.get_index_by_music_name(music)
-                        if int(dler) in include:
-                            continue
-                    if exclude is not None:
-                        ___, dler = await music_list_handler.get_index_by_music_name(music)
-                        if int(dler) in exclude:
-                            continue
-                    await music_controler.add_to_queue(server_id, music)
-                    added_musics_len += 1
-                t = len(musicList)
-                if shuffle:
-                    embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue aléatoirement ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
-                else: 
-                    embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
-                messages = await getMusicQueue(server_id, None, bot, bot.unique_downloader, music_list_handler)
-                view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
-                await ctx.send(embed=embed, view=view)
-                if not vc.is_playing():
-                    await music_controler.play_music(server_id=ctx.guild.id, vc=vc)
-                return
+            vc: discord.VoiceClient = music_controler.voice_clients[server_id]
+            if shuffle:
+                random.shuffle(musicList)
+            for music in musicList:
+                if include is not None:
+                    ___, dler = await music_list_handler.get_index_by_music_name(music)
+                    if int(dler) in include:
+                        continue
+                if exclude is not None:
+                    ___, dler = await music_list_handler.get_index_by_music_name(music)
+                    if int(dler) in exclude:
+                        continue
+                await music_controler.add_to_queue(server_id, music)
+                added_musics_len += 1
+            t = len(musicList)
+            if shuffle:
+                embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue aléatoirement ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
+            else: 
+                embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
+            messages = await getMusicQueue(server_id, None, bot, bot.unique_downloader, music_list_handler)
+            view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
+            await ctx.send(embed=embed, view=view)
+            if not vc.is_playing():
+                await music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+            return
         except Exception as e:
             print(e)
     except Exception as e:
@@ -1609,9 +1623,42 @@ class DropDownView(discord.ui.View):
     except Exception as e:
         LogErrorInWebhook()
 
+class SoundBoardManage:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def save_sound(self, sound_name: str, downloader: int, duration: int):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO soundboard (name, downloader, duration) VALUES (?,?,?)", (sound_name, downloader, duration,))
+        return 
+    
+    async def get_all_sounds_name(self):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT name FROM soundboard")
+        if data:
+            out = []
+            for sound in data:
+                out.append(f"{sound[0]}")
+            return out
+        else: return None
+
+    async def delete_sound(self, id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM soundboard WHERE id = ?", (id,))
+        return True
+    
+    async def get_sound_duration(self, sound_name: str):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT duration FROM soundboard WHERE name = ?", (sound_name, ))
+        if data:
+            return data[0]
+        return 0
+
 class SoundBoardView(discord.ui.View):
     """`sounds`: page_num list of a list """
-    def __init__(self, *, sounds: List[List[discord.ui.Button]], ctx: commands.Context, music_controler: MusicController, bot: Trapard):
+    def __init__(self, *, sounds: List[List[discord.ui.Button]], ctx: commands.Context, music_controler: MusicController, bot: Trapard, sb_manage: SoundBoardManage):
         super().__init__(timeout=None)
         self.ctx = ctx
         self.music_controler = music_controler
@@ -1619,6 +1666,7 @@ class SoundBoardView(discord.ui.View):
         self.page_count = len(sounds)
         self.current_page = 0
         self.bot = bot
+        self.sb_manage = sb_manage
         if self.sounds is not None:
             for button in self.sounds[self.current_page]:
                 self.add_item(button)
@@ -1703,6 +1751,7 @@ class SoundBoardView(discord.ui.View):
             await self.show_current_page(interaction, 1)
         else:
             await self.show_current_page(interaction, 0)
+    
     async def go_to_last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.show_current_page(interaction, self.page_count - 1 - self.current_page)
 
@@ -1712,8 +1761,15 @@ class SoundBoardView(discord.ui.View):
         except:
             pass
         if not self.music_controler.is_vc(server_id=self.ctx.guild.id):
+            if self.ctx.author.voice is None:
+                embed = create_embed(title="SoundBoard", description="Il semble que tu n'es pas connecté à un vocal...")
+                return await interaction.followup.send(embed=embed, ephemeral=True)
             await self.music_controler.join_vc(server_id=self.ctx.guild.id, channel=self.ctx.author.voice.channel)
         vc: discord.VoiceClient = self.music_controler.voice_clients[self.ctx.guild.id]
+        if (interaction.guild.id in self.music_controler.music_session) and (self.music_controler.music_session[interaction.guild.id]['paused']['status'] is False):
+            sound_time = await self.sb_manage.get_sound_duration(sound_name=btn_name)
+            self.music_controler.music_session[interaction.guild.id]['paused']['status'] = True
+            self.music_controler.music_session[interaction.guild.id]['paused']['sound_time'] = sound_time
         if vc.is_playing():
             previous_source, time = self.music_controler.get_current_playing_song(server_id=self.ctx.guild.id)
             hours, remainder = divmod(time, 3600)
@@ -1724,40 +1780,21 @@ class SoundBoardView(discord.ui.View):
             vc.play(source)
             while vc.is_playing():
                 await asyncio.sleep(0.2)
+                
+
+
+            if (interaction.guild.id in self.music_controler.music_session):
+                self.music_controler.music_session[interaction.guild.id]['paused']['status'] = False
             source = discord.FFmpegPCMAudio(previous_source, before_options=f'-ss {time}')
             vc.play(source)
         else:
             source = discord.FFmpegPCMAudio(f"{SOUNDBOARD}{btn_name}.mp3")
             vc.play(source)
             while vc.is_playing:
-                await asyncio.sleep(0.5)
-            return await vc.disconnect()
-
-class SoundBoardManage:
-    def __init__(self, pool: Pool) -> None:
-        self.pool = pool
-
-    async def save_sound(self, sound_name: str, downloader: int):
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("INSERT INTO soundboard (name, downloader) VALUES (?,?)", (sound_name, downloader,))
-        return 
-    
-    async def get_all_sounds_name(self):
-        async with self.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT name, id FROM soundboard")
-        if data:
-            out = []
-            for sound in data:
-                out.append(f"{sound[0]} ({sound[1]})")
-            return out
-        else: return None
-
-    async def delete_sound(self, id: int):
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("DELETE FROM soundboard WHERE id = ?", (id,))
-        return True
+                await asyncio.sleep(0.2)
+            if (interaction.guild.id in self.music_controler.music_session):
+                self.music_controler.music_session[interaction.guild.id]['paused']['status'] = False
+        return
 
 class SoundBoardDropDown(discord.ui.Select):
     try:
@@ -1829,7 +1866,6 @@ async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: 
                 await chann.send(embed=embed)
             return False
         
-
         async def download_thread(url, channel_id):
             # Code for downloading the video
 
@@ -1880,7 +1916,7 @@ async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: 
                     await chann.send(embed=embed)
 
         file_name = str(file_name).split(".")[0]
-        await soundboard_manager.save_sound(str(file_name), int(userid))
+        await soundboard_manager.save_sound(str(file_name), int(userid), duration=duration)
         return True
     except Exception as e:
         LogErrorInWebhook()
@@ -1936,11 +1972,11 @@ class Music(commands.Cog):
 
 # PLAY GROUP
     @commands.hybrid_group(name="play")
-    async def play1(self, ctx: commands.Context):
-        pass
+    async def play1(self, ctx: commands.Context): pass
 
     @play1.command() # old: /play
-    @app_commands.describe(index="Exemple : 124. Autre exemple : 124,126,214,128,1,2")
+    @app_commands.describe(index="Le/les numéro(s): 1 | 1,2,3 | 1-10")
+    @app_commands.describe(musique_name="Chercher la musique par texte (sans espace).")
     async def music(self, ctx: commands.Context, index:str=None, musique_name:str=None):
         """Joue une ou plusieurs musique(s)."""
         try:
@@ -1985,7 +2021,7 @@ class Music(commands.Cog):
             LogErrorInWebhook()
 
     @play1.command(name="liked") # old: /play-all-liked-songs
-    @app_commands.describe(user= "L'utilisateur dont tu veux jouer les musiques likés.")
+    @app_commands.describe(user= "Jouer les musiques de cette utilisateur.")
     async def play_liked(self, ctx: commands.Context, user: discord.User = None):
         """Joue toutes les musiques likés d'un utilisateur."""
         await command_counter(user_id=str(ctx.author.id), bot=self.bot)
@@ -2023,7 +2059,8 @@ class Music(commands.Cog):
         return
 
     @play1.command(name='next') #old: /play-next
-    @app_commands.describe(index="Exemple : 124. Autre exemple : 124,126,214,128,1,2")
+    @app_commands.describe(index="Le/les numéro(s): 1 | 1,2,3 | 1-10")
+    @app_commands.describe(musique_name="Chercher la musique par texte (sans espace).")
     async def play_next(self, ctx: commands.Context, index:str=None, musique_name:str=None):
         """Play-next une musique"""
         try:
@@ -2076,6 +2113,7 @@ class Music(commands.Cog):
         ])
     async def play_all(self, ctx: commands.Context, more_options: discord.app_commands.Choice[str]=None):
         """Jouer toutes les musiques, selon vos paramètres."""
+        print("called")
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if ctx.channel.name != "musique":
@@ -2088,7 +2126,8 @@ class Music(commands.Cog):
                     return await NewPlayAll(ctx=ctx, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler)
             else:
                 return await NewPlayAll(ctx=ctx, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler)
-        except:
+        except Exception as e:
+            print(e)
             LogErrorInWebhook()
 # END PLAY GROUP
 
@@ -2457,7 +2496,7 @@ class Music(commands.Cog):
     @playlist.command()
     @app_commands.describe(playlistname = "Le nom de la playlist à modifier.")
     @app_commands.describe(action_type = "Choisir add ou remove.")
-    @app_commands.describe(indexes = "Exemple: 1,23,55 ou: 5")
+    @app_commands.describe(indexes="Les numéros: 1,2,3 | 1-10")
     async def edit(self, ctx: commands.Context, playlistname: str, action_type: Literal["add", "remove"], indexes: str):
         """Modifier une playlist. Exemple: !playlist edit BPM remove 1,2,3,4"""
         try:
@@ -2624,28 +2663,13 @@ class Music(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
-# SoundBoard
-    @commands.hybrid_command(name="soundboard", aliases=["sb"])
+# SoundBoard group
+    @commands.hybrid_group(name="soundboard", aliases=["sb"], fallback='menu')            
     async def soundboard(self, ctx: commands.Context):
         """Affiche les sons de la soundboard."""
-        try:
-            async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall(f"SELECT name, id FROM soundboard")
-            if data:
-                output = []
-                for sound in data: 
-                    output.append(discord.ui.Button(label=f'{sound[0]} ({sound[1]})', style=discord.ButtonStyle.blurple, custom_id=sound[0]))
-                sounds = [output[i:i + 20] for i in range(0, len(output), 20)] # list of list of 20 btns
-                view = SoundBoardView(sounds=sounds, ctx=ctx, music_controler=self.music_controler, bot=self.bot)
-                embed = create_embed(title="SoundBoard", description=f"Page 1/{len(sounds)}")
-                return await ctx.send(embed=embed,view=view, ephemeral=True)
-            else: 
-                embed = create_embed(title="SoundBoard", description=f"Aucun son ne semble avoir été téléchargé.")
-                return await ctx.send(embed=embed, ephemeral=True)
-            
-        except: LogErrorInWebhook()
+        return await handle_sb(ctx=ctx, bot=self.bot, music_controler=self.music_controler)
 
-    @commands.hybrid_command(name='soundboard-download', aliases=['sbdl'])
+    @soundboard.command(name='download', aliases=['dl'])
     @app_commands.describe(keysearch = "Url Youtube ou texte de recherche.")
     async def soundboard_download(self, interaction: commands.Context, *, keysearch: str):
         """Télécharger une musique, par url Youtube, ou par texte de recherche."""
@@ -2723,7 +2747,7 @@ class Music(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
-    @commands.hybrid_command(name="soundboard-delete", aliases=["sbdel"])
+    @soundboard.command(name="delete", aliases=["del"])
     @app_commands.describe(id = "Le numéro du son à supprimer.")
     async def soundboard_delete(self, ctx: commands.Context, id: int):
         """Supprime le son correspondant à l'id."""
@@ -2733,6 +2757,34 @@ class Music(commands.Cog):
             embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** a bien été supprimé.")
         else: embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** semble ne pas exister...")
         return await ctx.send(embed=embed)
+# End SoundBoard group
+
+async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicController, userId: int=None):
+    """Affiche les sons de la soundboard."""
+    try:
+        if userId:
+            user_id = userId
+        else:
+            user_id = ctx.author.id
+        await command_counter(user_id=str(user_id), bot=bot)
+        async with bot.pool.acquire() as conn:
+            data = await conn.fetchall(f"SELECT name, id FROM soundboard")
+        if data:
+            output = []
+            for sound in data: 
+                output.append(discord.ui.Button(label=f'{sound[0]} ({sound[1]})', style=discord.ButtonStyle.blurple, custom_id=sound[0]))
+            sounds = [output[i:i + 20] for i in range(0, len(output), 20)] # list of list of 20 btns
+            view = SoundBoardView(sounds=sounds, ctx=ctx, music_controler=music_controler, bot=bot, sb_manage=SoundBoardManage(pool=bot.pool))
+            embed = create_embed(title="SoundBoard", description=f"Page 1/{len(sounds)}")
+        else:
+            embed = create_embed(title="SoundBoard", description=f"Aucun son ne semble avoir été téléchargé.")
+            view = None
+        if isinstance(ctx, discord.Interaction):
+            return await ctx.followup.send(embed=embed, view=view, ephemeral=True)
+        else: 
+            return await ctx.send(embed=embed, view=view, ephemeral=True)
+    except: LogErrorInWebhook()
+
 
 async def setup(bot: Trapard):
     await bot.add_cog(Music(bot))
