@@ -1643,6 +1643,12 @@ class SoundBoardManage:
             return out
         else: return None
 
+    async def get_sound_id(self, name:str):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT id FROM soundboard WHERE name = ?", (name,))
+        if data: return data[0]
+        return None
+
     async def delete_sound(self, id: int):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -2749,14 +2755,34 @@ class Music(commands.Cog):
 
     @soundboard.command(name="delete", aliases=["del"])
     @app_commands.describe(id = "Le numéro du son à supprimer.")
-    async def soundboard_delete(self, ctx: commands.Context, id: int):
+    async def soundboard_delete(self, ctx: commands.Context, id: int=None, sound_name: str=None):
         """Supprime le son correspondant à l'id."""
+        mng = SoundBoardManage(pool=self.bot.pool)
+        
         if id:
-            mng = SoundBoardManage(pool=self.bot.pool)
             await mng.delete_sound(id)
             embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** a bien été supprimé.")
-        else: embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** semble ne pas exister...")
+        elif sound_name:
+            await mng.delete_sound(sound_name)
+            embed = create_embed(title="SoundBoard", description=f"Le son **N°{sound_name}** a bien été supprimé.")
+        else: 
+            embed = create_embed(title="SoundBoard", description=f"Le son **N°{id}** semble ne pas exister...")
         return await ctx.send(embed=embed)
+
+    @soundboard_delete.autocomplete("sound_name")
+    async def autocomplete_soundboard_delete(self, ctx: discord.Interaction, musique_name: str):
+        try:
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT id, name FROM soundboard")
+            choices = []
+            for item in data:
+                if musique_name.lower() in str(item[1]).lower():
+                    choices.append(app_commands.Choice(name=f"{item[1]} ({item[0]})", value=str(item[0])))
+                if len(choices) == 25:
+                    break
+            return choices
+        except Exception as e:
+            LogErrorInWebhook()
 # End SoundBoard group
 
 async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicController, userId: int=None):
