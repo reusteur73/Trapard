@@ -1,18 +1,20 @@
-from .utils.functions import LogErrorInWebhook,get_username_from_id, command_counter,convert_k_m_to_int, editGstats, create_embed, write_item, trapcoins_handler, afficher_nombre_fr, load_json_data, lol_player_in_game, display_big_nums, init_user_to_item
+from .utils.functions import LogErrorInWebhook, command_counter, convert_k_m_to_int, editGstats, create_embed, write_item, afficher_nombre_fr, load_json_data, lol_player_in_game, display_big_nums, init_user_to_item
 from discord.ext import commands
 from .utils.data import interests_indexs, interests_infos, daily_claim_interest
+from .utils.classes import TrapcoinsHandler
 from discord import app_commands
-import discord, random, json, locale, datetime, time
+import discord, locale, datetime, time
 from bot import Trapard
 
 class EpargneConfirm(discord.ui.View):
-    def __init__(self, ctx, userid, tier, string):
+    def __init__(self, ctx, userid, tier, string, trapcoin_handler: TrapcoinsHandler):
         super().__init__()
+        self.trapcoin_handler = trapcoin_handler
         self.ctx = ctx
         self.userid = userid
         self.tier = tier
         self.string_tier = string
- 
+
         self.buttonoui = discord.ui.Button(style=discord.ButtonStyle.green, label="Oui", emoji="✅", custom_id="oui", disabled=False)
         self.add_item(self.buttonoui)
         self.buttonoui.callback = lambda interaction=self.ctx, button=self.buttonoui: self.on_button_click(interaction, button)
@@ -31,12 +33,12 @@ class EpargneConfirm(discord.ui.View):
 
                 cout = int(interests_infos[self.string_tier]["cout"])
                 # Remove trapcoins
-                usr_balance, _ = trapcoins_handler(type="get", userid=str(self.userid))
+                usr_balance, _ = await self.trapcoin_handler.get(userid=int(self.userid))
                 if usr_balance < cout:
                     embed = create_embed(title="Epargne-tiers", description=f"Vous n'avez pas assez de Trapcoins pour effectuer cette amélioration !")
                     return await self.ctx.send(embed=embed)
                 write_item(item="interets", userid=str(self.userid), values={'tier': self.tier + 1})
-                trapcoins_handler(type="remove", userid=str(self.userid), trapcoins_val=cout)
+                await self.trapcoin_handler.remove(userid=int(self.userid), amount=int(cout), wallet="trapcoins")
                 pourcent = interests_infos[self.string_tier]["interet"]
                 gain = locale.format_string("%d", interests_infos[self.string_tier]["gain max"], grouping=True)
                 montant_max = locale.format_string("%d", interests_infos[self.string_tier]["max"], grouping=True)
@@ -50,13 +52,14 @@ class EpargneConfirm(discord.ui.View):
             return await self.ctx.send(embed=embed)
 
 class EpargneTier(discord.ui.View):
-    def __init__(self, ctx: commands.Context, userid: int, pages: list):
+    def __init__(self, ctx: commands.Context, userid: int, pages: list,trapcoin_handler: TrapcoinsHandler):
         super().__init__()
         self.ctx = ctx
         self.userid = userid
         self.pages = pages
         self.page_count = len(pages)
         self.current_page = 0
+        self.trapcoin_handler = trapcoin_handler
 
         self.current_user_tier = load_json_data(item="interets", userid=str(self.userid), opt_val="tier")
         if self.current_user_tier == "UserNotFound":
@@ -155,7 +158,7 @@ class EpargneTier(discord.ui.View):
         if button.custom_id == f"unlock":
             tier = interests_indexs[self.btn_to_enable]
             formated_cout = locale.format_string("%d", interests_infos[tier]["cout"], grouping=True)
-            view_comfirm = EpargneConfirm(ctx=self.ctx, userid=self.userid, tier=self.current_user_tier, string=string)
+            view_comfirm = EpargneConfirm(ctx=self.ctx, userid=self.userid, tier=self.current_user_tier, string=string, trapcoin_handler=self.trapcoin_handler)
             embed = create_embed(title="Epargne-tiers", description=f"Attention, cela vous coutera {formated_cout} Trapcoins sur votre compte principal (celui avec lequelle vous jouez au g-roulette).\n\n**Etes vous sur ?**")
             await self.ctx.send(embed=embed, view=view_comfirm)
 
@@ -170,13 +173,12 @@ class Trapcoins(commands.Cog):
         """Voir ton nombre de Trapcoins."""
         await command_counter(user_id=str(ctx.author.id), bot=self.bot)
         trapcoins_emoji = "<:trapcoins:1108725845339672597>"
-        trapcoins = load_json_data(item="trapcoins", userid=str(ctx.author.id))
-        try:
-            pts, ep = trapcoins["trapcoins"], trapcoins["epargne"]
-        except TypeError:
-            init_user_to_item(item="trapcoins", userid=str(ctx.author.id), values=[0,0])
+        trapcoins, epargne = await self.bot.trapcoin_handler.get(userid=ctx.author.id)
+        if isinstance(trapcoins, str):
+            await self.bot.trapcoin_handler.create_user(userid=ctx.author.id)
+            trapcoins, epargne = 0, 0
         sugg = ["g-roulette", "g-lol-bet", "devinette"]
-        embed = create_embed(title="Balance", description=f"Tu as **{afficher_nombre_fr(int(pts))} Trapcoins {str(trapcoins_emoji)}** sur ton compte courant.\nEt **{afficher_nombre_fr(int(ep))} Trapcoins** {str(trapcoins_emoji)} en épargne.",suggestions=sugg)
+        embed = create_embed(title="Balance", description=f"Tu as **{afficher_nombre_fr(trapcoins)} Trapcoins {str(trapcoins_emoji)}** sur ton compte courant.\nEt **{afficher_nombre_fr(epargne)} Trapcoins** {str(trapcoins_emoji)} en épargne.",suggestions=sugg)
         return await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="transfer")
@@ -196,16 +198,15 @@ class Trapcoins(commands.Cog):
 
             # Check if the user has enough Trapcoins
             sender_id = ctx.author.id
-            sender_points, _ = trapcoins_handler(type="get", userid=str(sender_id))
+            sender_points, _ = await self.bot.trapcoin_handler.get(userid=ctx.author.id)
             if sender_points < nombre:
                 return await ctx.send("Tu n'as pas assez de Trapcoins !!")
 
             # Update the sender's points
-            trapcoins_handler(type="add", userid=str(sender_id), trapcoins_val=-nombre)
+            await self.bot.trapcoin_handler.remove(userid=ctx.author.id, amount=nombre, wallet="trapcoins")
 
             # Update the recipient's points
-            recipient_id = to_user.id
-            trapcoins_handler(type="add", userid=str(recipient_id), trapcoins_val=nombre)
+            await self.bot.trapcoin_handler.add(userid=to_user.id, amount=nombre, wallet="trapcoins")
             trapcoins_emoji = "<:trapcoins:1108725845339672597>"
             editGstats(userID=ctx.author.id, total_gains=None, total_pertes=None, transfert=-int(nombre), claims=None, win_alpha=None, nb_games=None, biggest_win=None)
             editGstats(userID=to_user.id, total_gains=None, total_pertes=None, transfert=int(nombre), claims=None, win_alpha=None, nb_games=None, biggest_win=None)
@@ -247,8 +248,7 @@ class Trapcoins(commands.Cog):
         if tier == "UserNotFound":
             init_user_to_item(item="interets", userid=str(ctx.author.id), values={"tier": 1})
             tier = 1
-
-        balance, ep = trapcoins_handler(type="get", userid=str(ctx.author.id))
+        balance, ep = await self.bot.trapcoin_handler.get(userid=ctx.author.id)
         str_tier = interests_indexs[int(tier)]
         max = interests_infos[str_tier]["max"]
 
@@ -260,8 +260,7 @@ class Trapcoins(commands.Cog):
                 return await ctx.send(embed=embed)
             if amount < 1:
                 embed = create_embed(title="Epargne-in", description="Le montant doit être supérieur à 0.")
-                await ctx.send(embed=embed)
-                return
+                return await ctx.send(embed=embed)
             if amount + ep > max:
                 embed = create_embed(title="Epargne-in", description=f"Vous ne pouvez pas deposer plus de **{display_big_nums(int(max))} ({afficher_nombre_fr(int(max))})** Trapcoins {str(trapcoins_emoji)} en épargne avec le {str_tier} !")
                 return await ctx.send(embed=embed)
@@ -271,11 +270,11 @@ class Trapcoins(commands.Cog):
         else:
             amount = maximum
 
-        trapcoins_handler(type="remove", userid=str(ctx.author.id), trapcoins_val=amount)
-        trapcoins_handler(type="add", userid=str(ctx.author.id), epargne_val=amount)
-        pts, ep = trapcoins_handler(type="get", userid=str(ctx.author.id))  
+        await self.bot.trapcoin_handler.remove(userid=ctx.author.id, amount=amount, wallet="trapcoins")
+        await self.bot.trapcoin_handler.add(userid=ctx.author.id, amount=amount, wallet="epargne")
+        pts, ep = await self.bot.trapcoin_handler.get(userid=ctx.author.id)
         embed = create_embed(title="Epargne-in", description=f"**{display_big_nums(int(amount))} ({afficher_nombre_fr(int(amount))})** {str(trapcoins_emoji)} ont été ajoutés à votre épargne.\n\nTu as maintenant **{display_big_nums(int(pts))} ({afficher_nombre_fr(int(pts))})** {str(trapcoins_emoji)} sur ton compte courant.\nEt **{display_big_nums(int(ep))} ({afficher_nombre_fr(int(ep))})** {str(trapcoins_emoji)} en épargne.")
-        await ctx.send(embed=embed)
+        return await ctx.send(embed=embed)
 
     @epargne.command()
     @app_commands.choices(maximum=[discord.app_commands.Choice(name="Maximum", value="Maximum")])
@@ -294,7 +293,7 @@ class Trapcoins(commands.Cog):
             return await ctx.send(embed=embed)
 
         user_id = str(ctx.author.id)
-        balance, savings = trapcoins_handler(type="get", userid=str(user_id))
+        balance, savings = await self.bot.trapcoin_handler.get(userid=user_id)
 
         if maximum:
             if savings > 0:
@@ -318,10 +317,10 @@ class Trapcoins(commands.Cog):
         trapcoins_emoji = "<:trapcoins:1108725845339672597>"
         if savings >= to_put:
             # Remove the amount from the user's savings
-            trapcoins_handler(type="remove", userid=str(user_id), epargne_val=int(to_put))
+            await self.bot.trapcoin_handler.remove(userid=user_id, amount=int(to_put), wallet="epargne")
             # Add the amount to the user's balance
-            trapcoins_handler(type="add", userid=str(user_id), trapcoins_val=to_put)
-            pts, ep = trapcoins_handler(type="get", userid=str(ctx.author.id))
+            await self.bot.trapcoin_handler.add(userid=user_id, amount=int(to_put), wallet="trapcoins")
+            pts, ep = await self.bot.trapcoin_handler.get(userid=user_id)
             embed = create_embed(title="Epargne-out", description=f"Vous avez retiré **{display_big_nums(int(to_put))} ({afficher_nombre_fr(int(to_put))})** {str(trapcoins_emoji)} de l'épargne.\n\nVous avez maintenant **{display_big_nums(int(pts))} ({afficher_nombre_fr(int(pts))})** {str(trapcoins_emoji)} sur votre compte courant.\nEt **{display_big_nums(int(ep))} ({afficher_nombre_fr(int(ep))})** {str(trapcoins_emoji)} en épargne.")
             return await ctx.send(embed=embed)
         else:
@@ -355,7 +354,7 @@ class Trapcoins(commands.Cog):
                 embed.set_footer(text=f"{string2} | 1k: 1 000 | 1 M: 1 000 000 | 1 B: 1 000 000 000 | 1 T: 1 000 000 000 000")
                 embeds.append(embed)
                 embed = discord.Embed(title="Détail des Tiers")
-        view = EpargneTier(ctx=ctx, userid=userid, pages=embeds)
+        view = EpargneTier(ctx=ctx, userid=userid, pages=embeds, trapcoin_handler=self.bot.trapcoin_handler)
 
         await ctx.send(embed=embeds[0], view=view)
 #END EPARGNE GROUP
@@ -385,7 +384,7 @@ class Trapcoins(commands.Cog):
                     bonus_gain = 0
                 bonus_streak = int(user_streak) * 10000
                 total_gain = int(50000 + bonus_gain + bonus_streak)
-                trapcoins_handler(type="add", userid=str(ctx.author.id), trapcoins_val=total_gain)
+                await self.bot.trapcoin_handler.add(userid=ctx.author.id, amount=total_gain, wallet="trapcoins")
                 write_item(item="streak", userid=str(ctx.author.id), values={"streak": user_streak, "timestamp": int(time.time())})
                 self.claimed[ctx.author.id] = now.date()
                 editGstats(userID=ctx.author.id, total_gains=None, total_pertes=None, transfert=None, claims=total_gain, win_alpha=None, nb_games=None, biggest_win=None)
@@ -400,15 +399,13 @@ class Trapcoins(commands.Cog):
         """Affiche les plus grosse balance classé."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            data = trapcoins_handler(type="baltop2")        
+            data = await self.bot.trapcoin_handler.baltop()      
             # Create an embed with the top balances
             embed = discord.Embed(title="Top Balances", color=discord.Color.blue())
-            for i, line in enumerate(data[:20]): # Show only top 10 balances
-                username = line[0]
-                balance = line[1]["trapcoins"]
-                ep = line[1]["epargne"]
-                user = await get_username_from_id(int(username), bot=self.bot)
-                embed.add_field(name=f"{i+1}. {user}", value=f"Balance: {afficher_nombre_fr(int(balance))}, epargne : {afficher_nombre_fr(int(ep))}", inline=True)
+            for i, line in enumerate(data): # Show only top 10 balances
+                userid, balance, ep = line
+                user = await self.bot.fetch_user(userid)
+                embed.add_field(name=f"{i+1}. {user.display_name}", value=f"Balance: {afficher_nombre_fr(balance)}, epargne : {afficher_nombre_fr(ep)}", inline=True)
             return await ctx.send(embed=embed)
         except Exception as e:
             LogErrorInWebhook()
