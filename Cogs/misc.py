@@ -1,9 +1,9 @@
 import os, discord, random, asyncio, datetime, torch, inspect, urllib3, traceback, json
 from discord.ui import UserSelect
 from discord import app_commands
-from .utils.functions import LogErrorInWebhook, format_duration, load_json_data, create_embed, command_counter, printFormat, convert_str_to_emojis, trapcoins_handler, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data
+from .utils.functions import LogErrorInWebhook, format_duration, create_embed, command_counter, printFormat, convert_str_to_emojis, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data
 from .utils.data import LANGUAGES
-from .utils.classes import Trapardeur
+from .utils.classes import Trapardeur, TrapcoinsHandler
 from .utils.context import Context
 from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH,R34_FOLDER, MAIN_DIR
 from discord.ext import commands
@@ -483,9 +483,9 @@ class TranslateResult(NamedTuple):
     target_language: str
 
 class PierreFeuilleCiseauxGame(discord.ui.View):
-    def __init__(self, ctx: discord.Interaction, player1: int, player2: int, bet: int=None):
+    def __init__(self, ctx: discord.Interaction, player1: int, player2: int, bot:Trapard, bet: int=None):
         super().__init__(timeout=500)
-
+        self.bot = bot
         self.ctx = ctx
         self.player1 = player1
         self.player2 = player2
@@ -588,8 +588,8 @@ class PierreFeuilleCiseauxGame(discord.ui.View):
 
                         self.loser_em = self.player1_bet
                     if self.bet:
-                        trapcoins_handler(type="remove", userid=self.loser, trapcoins_val=self.bet)
-                        trapcoins_handler(type="add", userid=self.winner, trapcoins_val=self.bet)
+                        await self.bot.trapcoin_handler.remove(userid=self.loser, amount=self.bet, wallet="trapcoins")
+                        await self.bot.trapcoin_handler.add(userid=self.winner, amount=self.bet, wallet="trapcoins")
                         embed = create_embed(title="Pierre-feuille-ciseaux", description=f"- {winner_mention} a gagné la partie ({self.winner_em}) + {convert_k_m_to_int(str(self.bet))}.\n\n- {loser_mention} a perdu la partie ({self.loser_em}) - {convert_k_m_to_int(str(self.bet))}.")
                     else:
                         embed = create_embed(title="Pierre-feuille-ciseaux", description=f"- {winner_mention} a gagné la partie ({self.winner_em}).\n\n- {loser_mention} a perdu la partie. ({self.loser_em})")
@@ -597,7 +597,7 @@ class PierreFeuilleCiseauxGame(discord.ui.View):
                     self.player1_bet = None
                     self.player2_bet = None
                     embed = create_embed(title="Pierre-feuille-ciseaux", description=f"- Il a **égalité**. Vous avez tous les deux choisi {bet}.\n\n- **Aller on y retourne** :")
-                    view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=self.bet)
+                    view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=self.bet, bot=self.bot)
                 # Handle result
             else: # Il manque un joueur
                 if interaction.user.id == self.player1:
@@ -619,9 +619,10 @@ class PierreFeuilleCiseauxGame(discord.ui.View):
         return await self.ctx.edit_original_response(view=None)
 
 class Puissance4Game(discord.ui.View):
-    def __init__(self, ctx, player1, player2, bet: int=None):
+    def __init__(self, ctx, player1, player2, trapcoin_handler: TrapcoinsHandler, bet: int=None):
         super().__init__(timeout=500)
         self.ctx = ctx
+        self.trapcoin_handler = trapcoin_handler
         self.interactable = [1,2,3,4,5]
         #       La grille de puissance 3
         #    1  - 2  - 3  - 4  - 5 
@@ -779,23 +780,23 @@ class Puissance4Game(discord.ui.View):
                 msg = f"<@{interaction.user.id}> a gagné."
                 
                 if self.bet:
-                    trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=int(self.bet))
+                    await self.trapcoin_handler.add(userid=interaction.user.id, amount=int(self.bet), wallet="trapcoins")
                     if interaction.user.id != self.player1:
                         loser = self.player1
-                        trapcoins_handler(type="remove", userid=str(loser), trapcoins_val=int(self.bet))
+                        await self.trapcoin_handler.remove(userid=int(loser), amount=int(self.bet), wallet="trapcoins")
                     elif interaction.user.id == self.player1:
                         loser = self.player2
-                        trapcoins_handler(type="remove", userid=str(loser), trapcoins_val=int(self.bet))
-                    trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=100000)
+                        await self.trapcoin_handler.remove(userid=int(loser), amount=int(self.bet), wallet="trapcoins")
+                    await self.trapcoin_handler.add(userid=interaction.user.id, amount=100000, wallet="trapcoins")
                     msg = f"- <@{interaction.user.id}> a gagné.\n\n- Il y avait **{afficher_nombre_fr(self.bet)} {str(self.trapcoins_emoji)}** en jeu.\n\n- <@{interaction.user.id}> : **+ {self.bet} + 100 000** = **{afficher_nombre_fr(self.bet + 100000)}** {str(self.trapcoins_emoji)}.\n\n- <@{loser}> : **- {self.bet}** {str(self.trapcoins_emoji)}, et tu gagnes **50 000** {str(self.trapcoins_emoji)} pour la participation."
                 else:
                     if interaction.user.id != self.player1:
                         loser = self.player1
                     elif interaction.user.id == self.player1:
                         loser = self.player2
-                    trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=50000)
+                    await self.trapcoin_handler.add(userid=interaction.user.id, amount=50000, wallet="trapcoins")
                     msg = f"- <@{interaction.user.id}> a gagné.\n\n- Tu gagnes le gain de base victoire de 50 000 {str(self.trapcoins_emoji)} + **50 000** {str(self.trapcoins_emoji)} pour la participation.\n\n- <@{loser}> Tu gagnes 50 000 {str(self.trapcoins_emoji)} pour la participation."
-                trapcoins_handler(type="add", userid=str(loser), trapcoins_val=50000)
+                await self.trapcoin_handler.add(userid=int(loser), amount=50000, wallet="trapcoins")
                 embed = create_embed(title="Puissance-3", description=msg)
                 return await interaction.message.edit(embed=embed)
 
@@ -807,9 +808,9 @@ class Puissance4Game(discord.ui.View):
             await interaction.message.edit(embed=embed, view=self)
 
 class MorpionGame(discord.ui.View):
-    def __init__(self, ctx, player1, player2, bet_message, bet: int=None):
+    def __init__(self, ctx, player1, player2, bet_message,trapcoin_handler: TrapcoinsHandler, bet: int=None):
         super().__init__(timeout=None)
-
+        self.trapcoin_handler = trapcoin_handler
         self.ctx = ctx
         self.message_display = "Au joueur 1 de jouer."
         self.good_nums = [1,2,3,6,7,8,11,12,13]
@@ -1014,11 +1015,11 @@ class MorpionGame(discord.ui.View):
                             bonus = calc_usr_gain_by_tier(self.player1)
                             embed = create_embed(title="Morpion", description=f"- <@{self.player1}> **tu as gagné** contre Trapard, bravo !!\n\n- Tu gagnes **25 000 {str(trapcoins_emoji)} + {afficher_nombre_fr(bonus)} {str(trapcoins_emoji)}** grâce à ton épargne tiers !")
                             self.game_ended = True
-                            trapcoins_handler(type="add", userid=self.player1, trapcoins_val=25000+bonus)
+                            await self.trapcoin_handler.add(userid=int(self.player1), amount=25000+bonus, wallet="trapcoins")
                             await interaction.message.edit(embed=embed, view=self)
                         elif self.check_win(self.button_disabled_p2):
                             embed = create_embed(title="Morpion", description=f"- <@{self.player1}> **tu as perdu** contre Trapard, la honte !!\n\n- Tu gagnes quand même **12 500 {str(trapcoins_emoji)}** en compensation !")
-                            trapcoins_handler(type="add", userid=self.player1, trapcoins_val=12500)
+                            await self.trapcoin_handler.add(userid=int(self.player1), amount=12500, wallet="trapcoins")
                             self.game_ended = True
                             await interaction.message.edit(embed=embed, view=self)
                         elif self.case_filled >= 8:
@@ -1044,18 +1045,18 @@ class MorpionGame(discord.ui.View):
                     msg = f"- <@{interaction.user.id}> a gagné."
                     
                     if self.bet:
-                        trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=int(self.bet))
+                        await self.trapcoin_handler.add(userid=interaction.user.id, amount=int(self.bet), wallet="trapcoins")
                         if interaction.user.id != self.player1:
                             loser = self.player1
-                            trapcoins_handler(type="remove", userid=str(loser), trapcoins_val=int(self.bet))
+                            await self.trapcoin_handler.remove(userid=int(loser), amount=int(self.bet), wallet="trapcoins")
                         elif interaction.user.id == self.player1:
                             loser = self.player2
-                            trapcoins_handler(type="remove", userid=str(loser), trapcoins_val=int(self.bet))
-                        trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=50000)
-                        trapcoins_handler(type="add", userid=str(loser), trapcoins_val=25000)
+                            await self.trapcoin_handler.remove(userid=int(loser), amount=int(self.bet), wallet="trapcoins")
+                        await self.trapcoin_handler.add(userid=interaction.user.id, amount=50000, wallet="trapcoins")
+                        await self.trapcoin_handler.add(userid=int(loser), amount=25000, wallet="trapcoins")
                         msg = f"- <@{interaction.user.id}> a gagné.\n\n- Il y avait **{afficher_nombre_fr(self.bet)} {str(self.trapcoins_emoji)}** en jeu.\n\n- <@{interaction.user.id}> : **+ {self.bet} + 50 000** = **{afficher_nombre_fr(self.bet + 50000)}** {str(self.trapcoins_emoji)}.\n\n- <@{loser}> : **- {self.bet}** {str(self.trapcoins_emoji)}, et tu gagnes 25 000 {str(self.trapcoins_emoji)} pour la participation."
                     else:
-                        trapcoins_handler(type="add", userid=str(interaction.user.id), trapcoins_val=25000)
+                        await self.trapcoin_handler.add(userid=interaction.user.id, amount=25000, wallet="trapcoins")
                         msg = f"- <@{interaction.user.id}> a gagné.\n\n- Tu gagnes le gain de base de 25 000 {str(self.trapcoins_emoji)}."
                     embed = create_embed(title="Morpion", description=msg)
                     return await interaction.message.edit(embed=embed)
@@ -1107,8 +1108,8 @@ class Parier(discord.ui.View):
                 if new_m == "ValueError":
                     msg = f"**- <@{self.player1}>, Le montant est incorect."
 
-                player1_bal, _ = trapcoins_handler(type="get", userid=str(self.player1))
-                player2_bal, __ = trapcoins_handler(type="get", userid=str(self.player2))
+                player1_bal, _ = await self.bot.trapcoin_handler.get(userid=int(self.player1))
+                player2_bal, __ = await self.bot.trapcoin_handler.get(userid=int(self.player2))
                 err = False
 
                 if self.wanted_game == "morpion":
@@ -1128,21 +1129,21 @@ class Parier(discord.ui.View):
                     err = True
                 if err:
                     if self.wanted_game == "morpion":
-                        game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet_message=None)
+                        game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2,trapcoin_handler=self.bot.trapcoin_handler, bet_message=None)
                     elif self.wanted_game == "puissance":
-                        game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2)
+                        game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2, trapcoin_handler=self.bot.trapcoin_handler)
                     elif self.wanted_game == "pfc":
-                        game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2)
+                        game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bot=self.bot)
                     msg += f"- \n\nLa partie continue avec les **paris désactivés.**\n\n- **C'est à <@{self.player1}> de jouer.**"
                     embed = create_embed(title=title, description=msg)
                     await interaction.message.edit(embed=embed,view=game_view)
                     return await message.delete()
                 if self.wanted_game == "morpion":
-                    game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m, bet_message=None)
+                    game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m,trapcoin_handler=self.bot.trapcoin_handler, bet_message=None)
                 elif self.wanted_game == "puissance":
-                    game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m)
+                    game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m, trapcoin_handler=self.bot.trapcoin_handler)
                 elif self.wanted_game == "pfc":
-                    game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m)
+                    game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=new_m, bot=self.bot)
 
                 if self.wanted_game == "morpion" or self.wanted_game == "puissance":
                     embed = create_embed(title=title, description=f"- <@{self.player1}> (`👑`) vs <@{self.player2}>\n\n- Il y a {new_m} Trapcoins en jeu.\n\n- **C'est à <@{self.player1}> de jouer.**")
@@ -1156,13 +1157,13 @@ class Parier(discord.ui.View):
         else:
             if self.wanted_game == "morpion":
                 title = "Morpion"
-                game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet_message=None)
+                game_view = MorpionGame(ctx=self.ctx, player1=self.player1, player2=self.player2,trapcoin_handler=self.bot.trapcoin_handler, bet_message=None)
             elif self.wanted_game == "puissance":
                 title = "Puissance-3"
-                game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2)
+                game_view = Puissance4Game(ctx=self.ctx, player1=self.player1, player2=self.player2, trapcoin_handler=self.bot.trapcoin_handler)
             elif self.wanted_game == "pfc":
                 title = "Pierre-feuille-ciseaux"
-                game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=None)
+                game_view = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2=self.player2, bet=None, bot=self.bot)
 
             if self.wanted_game == "morpion" or self.wanted_game == "puissance":
                 embed = create_embed(title=title, description=f"- <@{self.player1}> (`👑`) vs <@{self.player2}>\n\n- Pari `OFF`.\n\n- **C'est à <@{self.player1}> de jouer.**")
@@ -1203,7 +1204,7 @@ class AttenteJoueur(discord.ui.View):
             pass
         if self.wanted_game == "morpion":
             if button.custom_id == "btn_2":
-                view2 = MorpionGame(ctx=interaction, player1=self.player1, player2="trapard", bet_message=None)
+                view2 = MorpionGame(ctx=interaction, player1=self.player1, player2="trapard",trapcoin_handler=self.bot.trapcoin_handler, bet_message=None)
                 embed = create_embed(title="Morpion", description=f"- <@{self.player1}> (`👑`) vs Trapard")
                 await interaction.message.edit(embed=embed,view=view2)
             else:
@@ -1236,7 +1237,7 @@ class AttenteJoueur(discord.ui.View):
                 pass
             else:
                 if button.custom_id == "btn_2":
-                    view2 = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2="trapard")
+                    view2 = PierreFeuilleCiseauxGame(ctx=self.ctx, player1=self.player1, player2="trapard", bot=self.bot)
                     embed = create_embed(title="Pierre-feuille-ciseaux", description=f"- <@{self.ctx.author.id}> vs Trapard Pierre-feuille-ciseaux !\n\n- **Choisi ton symbole**:")
                 else:
                     view2 = self
@@ -1858,7 +1859,7 @@ async def play_hexcodle(ctx: commands.Context, bot: Trapard):
             guesses.append(f"- {result}\n**{essaie+1}/5**\n- {convert_str_to_emojis(guess)}\n\n")
             view = hexcodleView(reponse=random_color, ctx=ctx, is_color=guess, bot=bot)
             if result == "✅ ✅ ✅ ✅ ✅ ✅":
-                trapcoins_handler(type="add", userid=str(user_id), trapcoins_val=100000000)
+                await bot.trapcoin_handler.add(userid=user_id, amount=100000000, wallet="trapcoins")
                 view = hexcodleView(reponse=random_color, ctx=ctx, is_color=guess, rejouer=True, bot=bot)
                 embed = create_embed(title="HexCodle", description=f"""{''.join(guesses)} {essaie+1}/5 essaies\n\n**Bravo, tu as trouvé le bon code hexadécimal !**\n\n**Tu as gagné 100M Trapcoins!**""")
                 embed.set_image(url=f"attachment://random_color_image{user_id}.png")
