@@ -1244,7 +1244,7 @@ class AttenteJoueur(discord.ui.View):
                 await interaction.message.edit(embed=embed, view=view2)
 
 class hexcodleView(discord.ui.View):
-    def __init__(self, reponse: str, ctx: discord.Interaction,bot:Trapard, is_color: str = None, rejouer : bool = False, original_message: int = None):
+    def __init__(self, reponse: str, ctx: commands.Context,bot:Trapard, is_color: str = None, rejouer : bool = False, original_message: int = None):
         super().__init__(timeout=500)
         self.ctx = ctx
         self.reponse = reponse
@@ -1268,16 +1268,13 @@ class hexcodleView(discord.ui.View):
             self.rejouer_btn = discord.ui.Button(label="Re-jouer", style=discord.ButtonStyle.green, emoji="🔄", custom_id="rejouer")
             self.add_item(self.rejouer_btn)
             self.rejouer_btn.callback = lambda interaction=self.ctx, button=self.rejouer_btn: self.on_button_click(interaction, button)
-            
 
     async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-        
         if button.custom_id == "help":
             await interaction.response.defer()
             fields = [{"name": "1.", "value": "Un code hexadécimal peut être représenté comme RRVVBB où R représente le rouge, V représente le vert et B représente les valeurs bleues. Les chiffres/lettres à ces emplacements indiquent l'intensité de cette couleur ; 0 étant le plus bas, et F étant le plus élevé.", "inline": True}, {"name": "2.",  "value": "Les chiffres de 0 à 9 représentent les dix premières valeurs et A-F peuvent être représentés comme les chiffres 10-15, où 0 est la plus basse intensité, et 15, ou F, est la plus haute intensité.", "inline": True}, {"name": "3.", "value": "Voici quelques codes hexadécimaux courants :```#FFFFFF : Blanc (intensité maximale pour toutes les composantes RVB)\n#000000 : Noir (aucune intensité pour toutes les composantes RVB)\n#FF0000 : Rouge (intensité maximale pour le rouge, aucune intensité pour le vert et le bleu)\n#00FF00 : Vert (intensité maximale pour le vert, aucune intensité pour le rouge et le bleu)\n#0000FF : Bleu (intensité maximale pour le bleu, aucune intensité pour le rouge et le vert)```", "inline": False}]
             embed = create_embed(title="Un hex code c'est quoi ?", description="", fields=fields)
-            try: return await self.ctx.response.send_message(embed=embed, ephemeral=True)
-            except: return await self.ctx.followup.send(embed=embed, ephemeral=True)
+            return await self.ctx.send(embed=embed, ephemeral=True)
         elif button.custom_id == "color":
             await interaction.response.defer()
             img = create_image_with_color("#"+self.color)
@@ -1285,19 +1282,15 @@ class hexcodleView(discord.ui.View):
             file = discord.File(f"{FILES_PATH}img_gen{interaction.user.id}.png", filename=f"img_gen{interaction.user.id}.png")
             embed = create_embed(title="HexCodle", description="Voici la couleur que tu as générée.")
             embed.set_image(url=f"attachment://img_gen{interaction.user.id}.png")
-            try: await self.ctx.response.send_message(file=file,embed=embed, ephemeral=True)
-            except: await self.ctx.followup.send(file=file,embed=embed, ephemeral=True)
+            await self.ctx.send(file=file,embed=embed, ephemeral=True)
             os.remove(f"{FILES_PATH}img_gen{interaction.user.id}.png")
         elif button.custom_id == "regles":
             await interaction.response.defer()
             fields = [{"name": "1.", "value": "Vous aurez 5 essais pour deviner correctement le code hexadécimal de la couleur affichée à l'écran dans la zone cible. Après chaque essai, la couleur correspondant au code hexadécimal que vous avez saisi s'affichera dans la zone de votre proposition.", "inline": True}, {"name": "2.", "value": "Des symboles apparaîtront dans la section des propositions pour indiquer la proximité de votre essai. Utilisez-les pour évaluer votre prochaine proposition ! Voici la signification de chaque symbole :", "inline": True}, {"name": "3.", "value": "```✅ Vous avez trouvé !\n🔼 Proposez un nombre plus élevé (à une différence de 1 ou 2 près)*\n🔽 Proposez un nombre plus bas (à une différence de 1 ou 2 près)*\n⏫ Proposez un nombre bien plus élevé ! (à une différence de 3 ou plus)\n⏬ Proposez un nombre bien plus bas ! (à une différence de 3 ou plus)```", "inline": False}]
             embed = create_embed(title="HexCodle", description='', fields=fields)
-            try: return await self.ctx.response.send_message(embed=embed, ephemeral=True)
-            except: return await self.ctx.followup.send(embed=embed, ephemeral=True)
+            await self.ctx.send(embed=embed, ephemeral=True)
         elif button.custom_id == "rejouer":
             return await play_hexcodle(ctx=interaction, bot=self.bot)
-    async def on_timeout(self):
-        return await self.ctx.edit_original_response(view=None)
 
 class CringédexView(discord.ui.View):
     def __init__(self, ctx: discord.Interaction, user: discord.User, cringeList: list):
