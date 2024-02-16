@@ -8,7 +8,7 @@ from discord.ui import Modal, TextInput
 from time import perf_counter
 from asyncio import sleep
 from bot import PLAYLIST_LIST, Trapard
-from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, load_json_data, write_item, is_url, convert_txt_to_colored
+from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_txt_to_colored
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
 import traceback, re, random, os, asyncio, threading, base64
 from asqlite import Pool
@@ -1260,7 +1260,7 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
             self.add_item(self.prev_song_btn)
             self.prev_song_btn.callback = lambda interaction=self.ctx, button=self.prev_song_btn: self.on_button_click(interaction, button)
 
-            self.sb_btn = discord.ui.Button(label="Menu SoundBoard", style=discord.ButtonStyle.green, emoji="🔊", custom_id="sb", row=0)
+            self.sb_btn = discord.ui.Button(label="SoundBoard", style=discord.ButtonStyle.green, emoji="🔊", custom_id="sb", row=0)
             self.add_item(self.sb_btn)
             self.sb_btn.callback = lambda interaction=self.ctx, button=self.sb_btn: self.on_button_click(interaction, button)
 
@@ -2783,7 +2783,7 @@ class Music(commands.Cog):
             return choices
         except Exception as e:
             LogErrorInWebhook()
-# End SoundBoard group
+ # End SoundBoard group
 
 async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicController, userId: int=None):
     """Affiche les sons de la soundboard."""
@@ -2810,7 +2810,6 @@ async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicC
         else: 
             return await ctx.send(embed=embed, view=view, ephemeral=True)
     except: LogErrorInWebhook()
-
 
 async def setup(bot: Trapard):
     await bot.add_cog(Music(bot))
