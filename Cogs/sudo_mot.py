@@ -7,6 +7,7 @@ from uuid import uuid4
 from .utils.functions import create_embed, LogErrorInWebhook, command_counter, load_json_data, format_duration
 from .utils.sudoku import main as sudoku_generator
 from typing import Literal
+from aiohttp import ClientSession
 from .utils.mot_mels import mains as motMels
 
 class LinkView(discord.ui.View):
@@ -39,7 +40,10 @@ class SudoMots(commands.Cog):
             await ctx.send(view=view, ephemeral=True)
             # store game data in channel 
             msg = f"Game ID = {game_id}\n\nGame URL = {sudoku_dict['url']}\nGame DATA = {sudoku_dict['list']}\nUserID = {username}\nDifficultée = {difficulte}\ninit chann = {init_chann}"
-            DiscordWebhook(url=os.environ.get("SUDOKU_WEBHOOK"), content=msg).execute()
+            async with ClientSession() as session:
+                webhook = discord.Webhook.from_url(os.environ.get("SUDOKU_WEBHOOK"), session=session)
+                await webhook.send(content=msg)
+            return
         except Exception as e:
             LogErrorInWebhook()   
 
@@ -87,8 +91,9 @@ class SudoMots(commands.Cog):
             wanted_words_encoded = base64.b64encode(json.dumps(wanted_words).encode('utf-8')).decode('utf-8')
             liste_grille_encoded = base64.b64encode(json.dumps(liste_grille).encode('utf-8')).decode('utf-8')
             msg_webhook = f"Game ID: {gameid}\nUser ID: {userid}\nInit chann: {init_channel}\nMots voulue: {wanted_words}\nGrille: {liste_grille}"
-            DiscordWebhook(url=os.environ.get("MOTMEL_WEBHOOK"), content=msg_webhook).execute()
-
+            async with ClientSession() as session:
+                webhook = discord.Webhook.from_url(os.environ.get("MOTMEL_WEBHOOK"), session=session)
+                await webhook.send(content=msg_webhook)
             url = f"http://www.reusteur.org/mot-meles/jeu.php?grille={liste_grille_encoded}&words={wanted_words_encoded}&userid={userid}&gameid={gameid}"
             # short the link
             encoded_url = base64.b64encode(url.encode('utf-8')).decode('utf-8')
