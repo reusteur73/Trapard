@@ -1,5 +1,5 @@
-import discord, datetime, traceback
-from typing import TYPE_CHECKING
+import discord, datetime, traceback, asyncio
+from typing import TYPE_CHECKING, Literal
 from .data import commands_id_dict, daily_claim_interest
 from .path import JSON_DATA, G_STATS, R34_FOLDER
 from discord_webhook import DiscordWebhook
@@ -89,7 +89,12 @@ def LogErrorInWebhook(error=""):
         f += "```" + traceback.format_exc() + "```"
     if error != "":
         f += "MSG Custom: ```" + error + "```"
-    DiscordWebhook(url=os.environ.get("ERROR_WEBHOOK"), content=str(f)).execute()
+    asyncio.create_task(run_async_webhook_error(f))
+
+async def run_async_webhook_error(msg):
+    async with ClientSession() as session:
+        webhook = discord.Webhook.from_url(os.environ.get("ERROR_WEBHOOK"), session=session)
+        await webhook.send(content=msg, username='Foo')
 
 async def command_counter(user_id: str, bot, type:str=None):
     """
@@ -389,48 +394,6 @@ def init_user_to_item(item:str, userid: str=None, values: dict=None):
         with open(file_path, "w") as f:
             json.dump(data, f)
         f.close()
-    except Exception as e:
-        LogErrorInWebhook()
-
-def trapcoins_handler(type: str, userid: str=None, trapcoins_val: int=None, epargne_val: int=None):
-    """
-        Type : ["get", "add", "remove", "baltop"]
-        Get: return tuple trap/ep
-    """
-    try:
-        possible_type = ["get", "add", "remove", "baltop", 'baltop2']
-
-        if type in possible_type:
-            if type == "get" and userid:
-                data = load_json_data(item="trapcoins", userid=str(userid))
-                print(data)
-                if data is None or data == "UserNotFound":
-                    init_user_to_item(item="trapcoins", userid=str(userid), values={"trapcoins": 0, "epargne": 0})
-                    return 0, 0
-                else:
-                    return data['trapcoins'], data['epargne']
-            if type == "add" and userid:
-                prev = load_json_data(item="trapcoins", userid=str(userid))
-                if trapcoins_val:
-                    prev["trapcoins"] += trapcoins_val
-                if epargne_val: 
-                    prev['epargne'] += epargne_val
-                write_item(item="trapcoins", userid=str(userid), values=prev)
-            if type == "remove" and userid:
-                prev = load_json_data(item="trapcoins", userid=str(userid))
-                if trapcoins_val:
-                    prev["trapcoins"] -= trapcoins_val
-                if epargne_val: 
-                    prev['epargne'] -= epargne_val
-                write_item(item="trapcoins", userid=str(userid), values=prev)
-            if type == "baltop":
-                data = load_json_data(item="trapcoins")
-                sorted_data = sorted(data.items(), key=lambda x: x[1]['trapcoins'] + x[1]['epargne'], reverse=True)
-                return sorted_data[0]
-            if type == "baltop2": 
-                data = load_json_data(item="trapcoins")
-                sorted_data = sorted(data.items(), key=lambda x: x[1]['trapcoins'] + x[1]['epargne'], reverse=True)
-                return sorted_data
     except Exception as e:
         LogErrorInWebhook()
 
