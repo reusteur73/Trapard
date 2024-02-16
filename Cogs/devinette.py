@@ -1,6 +1,6 @@
 from discord.ext import commands
 from bot import Trapard
-from .utils.functions import LogErrorInWebhook, create_embed, command_counter, calc_usr_gain_by_tier, trapcoins_handler, afficher_nombre_fr, write_item, load_json_data, get_username_from_id
+from .utils.functions import LogErrorInWebhook, create_embed, command_counter, calc_usr_gain_by_tier, afficher_nombre_fr, write_item, load_json_data
 from .utils.path import DEVINETTE_WORDS_LIST, FILES_PATH
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -248,9 +248,9 @@ async def devinette_command(interaction: commands.Context, devinette: Devinette,
                 else:
                     ss = "s"
                 tier_bonus = calc_usr_gain_by_tier(userid)
-                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(tier_bonus))
+                await bot.trapcoin_handler.add(userid=userid, amount=int(tier_bonus), wallet="trapcoins")
                 if deviniette_bonus:
-                    trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(deviniette_bonus))
+                    await bot.trapcoin_handler.add(userid=userid, amount=deviniette_bonus, wallet="trapcoins")
                     msg = "Bravo ! tu as deviné le bon mot clé en " + str(i + 1 ) + f" essaie{s}. Tu as gagné {afficher_nombre_fr(points1 + pts_bonus)} points ainsi que **{afficher_nombre_fr(trapcoins)}** (gain de base) + **{afficher_nombre_fr(deviniette_bonus)}** (grâce aux daily: {devinette.devinette_daily[interaction.author.id]}/4) et {afficher_nombre_fr(tier_bonus)}, c'est à dire **{afficher_nombre_fr(trapcoins + deviniette_bonus + tier_bonus)} Trapcoins**!"
                     tot = points1 + pts_bonus
                     prev_score = load_json_data(item="devinette", userid=str(userid))
@@ -278,7 +278,7 @@ async def devinette_command(interaction: commands.Context, devinette: Devinette,
                 else:
                     deef1 = deef
                     await interaction.channel.send("<" + deef1 + ">")
-                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(trapcoins))
+                await bot.trapcoin_handler.add(userid=userid, amount=trapcoins, wallet="trapcoins")
                 return
             elif guess.content == "jsp":
                 embed = create_embed(title="Devinette", description="Noob, tu as abandonné! le mot clé était **__{}__**".format(answer))
