@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from bot import Trapard
-from .utils.functions import LogErrorInWebhook, write_item, trapcoins_handler, load_json_data, printFormat
+from .utils.functions import LogErrorInWebhook, write_item, load_json_data
 from typing import Optional, Literal, List
 
 
@@ -91,12 +91,12 @@ class Admin(commands.Cog):
         try:
             if ctx.author.id != self.bot.owner_id:
                 return await ctx.send("Tu n'es pas autorisé à utiliser cette commande !")
-            existing_data = load_json_data(item="trapcoins", userid=str(userid))
-            if existing_data == "UserNotFound":
-                new_user_data = {"trapcoins": nb, "epargne": 0}
-                write_item(item="trapcoins", userid=str(userid), values=new_user_data)
+            tr, ep = await self.bot.trapcoin_handler.get(userid=userid.id)
+            if tr == "Unknown user":
+                await self.bot.trapcoin_handler.create_user(userid=userid.id)
+                await self.bot.trapcoin_handler.add(userid=userid.id, amount=int(nb), wallet='trapcoins')
             else:
-                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=nb)
+                await self.bot.trapcoin_handler.add(userid=userid.id, amount=int(nb), wallet='trapcoins')
             return await ctx.send("points ajouté !", ephemeral=True)
         except Exception as e:
             LogErrorInWebhook()
