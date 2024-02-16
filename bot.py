@@ -4,12 +4,12 @@ from time import perf_counter
 from collections import Counter
 from Cogs.utils.context import Context
 import asqlite, logging
-from Cogs.utils.classes import Trapardeur, IaView, CallFriends
+from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler
 from Cogs.utils.data import FULL_EMOJIS_LIST
-from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, trapcoins_handler, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku
-from Cogs.utils.path import DB_PATH, MUSIC_LIST, PLAYLIST_LIST
+from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku
+from Cogs.utils.path import DB_PATH
 from asyncio import sleep
-import json, asyncio, openai, os
+import asyncio, openai, os
 
 initial_extensions = [
     "Cogs.rappels",
@@ -22,7 +22,8 @@ initial_extensions = [
     "Cogs.admin",
     "Cogs.tasks",
     "Cogs.sudo_mot",
-    "Cogs.misc"
+    "Cogs.misc",
+    "Cogs.blocker"
 ]
 # logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
@@ -86,6 +87,8 @@ class Trapard(commands.Bot):
         self.current_track = {}
         self.last_music = {}
         self.unique_downloader_display_names = {}
+        
+        self.trapcoin_handler = TrapcoinsHandler(pool=self.pool)
 
         self.debug = False
 
@@ -195,13 +198,13 @@ class Trapard(commands.Bot):
                         daily_bonus = 25000
                 trapcoins_emoji = "<:trapcoins:1108725845339672597>"
                 tier_bonus = calc_usr_gain_by_tier(userID2)
-                trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(tier_bonus))
+                await self.trapcoin_handler.add(userid=userID2, amount=int(tier_bonus), wallet='trapcoins')
                 if daily_bonus:
-                    trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(daily_bonus))
+                    await self.trapcoin_handler.add(userid=userID2, amount=int(daily_bonus), wallet='trapcoins')
                     msg = f"- <@{userID2}>, " + f" Tu l'as terminée en {tmps}!\n\n- Tu as gagné(e) 1 point et **{afficher_nombre_fr(basecoin)}** (gain de base) + **{afficher_nombre_fr(final_coins - basecoin)}** (multiplicateur de temps) + **{afficher_nombre_fr(daily_bonus)}** (gâce aux daily {self.motmels_daily[intuserid]}/4) + {afficher_nombre_fr(tier_bonus)} de bonus tier.\n\n- C'est à dire **{afficher_nombre_fr(final_coins + daily_bonus + tier_bonus)}** Trapcoins {str(trapcoins_emoji)}. GG!"
                 else:
                     msg = f"- <@{userID2}>, " + f" Tu l'as terminée en {tmps}!\n\n- Tu as gagné(e) 1 point et **{afficher_nombre_fr(basecoin)}** (gain de base) + **{afficher_nombre_fr(final_coins - basecoin)}** (multiplicateur de temps) + {afficher_nombre_fr(tier_bonus)} de bonus tier.\n\nC'est à dire **{afficher_nombre_fr(final_coins + tier_bonus)}** Trapcoins {str(trapcoins_emoji)}. GG!"
-                trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(final_coins))
+                await self.trapcoin_handler.add(userid=userID2, amount=int(final_coins), wallet='trapcoins')
                 points = load_json_data(item="mots-meles", userid=str(userID2), opt_val="points")
                 if points == "UserNotFound":
                     write_item(item="mots-meles", userid=str(userID2), values={'points': 0, 'temps': 999})
@@ -283,10 +286,10 @@ class Trapard(commands.Bot):
                             sudoku_bonus = 200000
                     trapcoins_emoji = "<:trapcoins:1108725845339672597>"
                     tier_bonus = calc_usr_gain_by_tier(userID2)
-                    trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(tier_bonus))
+                    await self.trapcoin_handler.add(userid=userID2, amount=int(tier_bonus), wallet='trapcoins')
                     if sudoku_bonus:
                         msg = f"- <@{userID2}>, " + txt + f" Tu l'as terminée en {tmps}!\n\n- Tu as gagné **{afficher_nombre_fr(trap)}** (gain de base) + **{afficher_nombre_fr(final_coins - trap)}** (multiplicateur de temps) + **{afficher_nombre_fr(sudoku_bonus)}** (grâce aux daily: {self.sudoku_daily[userID2]}/4) + {afficher_nombre_fr(tier_bonus)} en tier bonus.\n\n- C'est à dire **{afficher_nombre_fr(final_coins + sudoku_bonus + tier_bonus)}** Trapcoins {str(trapcoins_emoji)}!"
-                        trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(sudoku_bonus))
+                        await self.trapcoin_handler.add(userid=userID2, amount=int(sudoku_bonus), wallet='trapcoins')
                     else:
                         msg = f"- <@{userID2}>, " + txt + f" Tu l'as terminée en {tmps}!\n\n- Tu as gagné **{afficher_nombre_fr(trap)}** (gain de base) + **{afficher_nombre_fr(final_coins - trap)}** (multiplicateur de temps) + {afficher_nombre_fr(tier_bonus)} en tier bonus.\n\n- C'est à dire **{afficher_nombre_fr(final_coins + tier_bonus)}** Trapcoins {str(trapcoins_emoji)}!"
                     embed = create_embed(title="Sudoku", description=msg)
@@ -300,7 +303,7 @@ class Trapard(commands.Bot):
                     if prev_score['temps'] > int(temps):
                         prev_score['temps'] = int(temps)
                     write_item(item='sudoku-points', userid=str(userID2), values=prev_score)
-                    trapcoins_handler(type="add", userid=str(userID2), trapcoins_val=int(final_coins))
+                    await self.trapcoin_handler.add(userid=userID2, amount=int(final_coins), wallet='trapcoins')
                 else:
                     txt = f"Il y a des erreurs, votre grille :{gr}La correction:{display}"
                     to_send = f"<@{userID2}>, " + txt + f"(tu as mis {tmps}):"
