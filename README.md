@@ -10,6 +10,6 @@ Occasionally, I find the motivation to enhance and update the bot, and I documen
 
 ## Resources I used
 - My Brain (to a modest extent)
-- The <a href="https://discord.gg/r3sSKJJ">discord.py</a> server
-- The <a href="https://discordpy.readthedocs.io/en/stable/">discord.py</a> documentation
+- The <a href="https://discord.gg/r3sSKJJ" target="_blank">discord.py</a> server
+- The <a href="https://discordpy.readthedocs.io/en/stable/" target="_blank">discord.py</a> documentation
 - Chat GPT (although I do not recommend it, especially considering it is stuck before the 2.2 update of discord.py)
