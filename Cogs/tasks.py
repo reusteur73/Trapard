@@ -1,4 +1,4 @@
-from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, trapcoins_handler, create_embed, seconds_until, write_item, convert_txt_to_colored
+from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, create_embed, seconds_until, write_item, convert_txt_to_colored
 from .utils.data import interests_indexs, interests_infos
 from asyncio import sleep
 from bs4 import BeautifulSoup
@@ -48,9 +48,10 @@ class Tasks(commands.Cog):
     @tasks.loop(minutes=1)
     async def update_status(self):
         try:
-            data = load_json_data(item="song-stats")
-            duration = data['time']
-            numPlayed = data['number-played']
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchone("SELECT time, number FROM songs_stats WHERE id = 1")
+            duration = data[0]
+            numPlayed = data[1]
             duration = format_duration(duration)
             if self.status_iterations == 0:
                 wanted = f"{afficher_nombre_fr(numPlayed)} musiques jouées !"
@@ -80,7 +81,7 @@ class Tasks(commands.Cog):
             field = ""
             added = 0
             for key, val in data_tiers.items():
-                user_epergne = load_json_data(item="trapcoins", userid=str(key), opt_val="epargne")
+                _, user_epergne = await self.bot.trapcoin_handler.get(userid=int(key))
                 if isinstance(user_epergne, int):
                     interest_mult1 = self.interests_indexs[int(val["tier"])]
                     interest_mult = self.interests_infos[interest_mult1]["interet"]
@@ -88,7 +89,7 @@ class Tasks(commands.Cog):
                     winned = wins_tot - int(user_epergne)
                     if int(calculer_pourcentage(float(user_epergne), float(interest_mult))) != 0:
                         print(f"<@{key}> : {int(calculer_pourcentage(float(user_epergne), float(interest_mult)))} Trapcoins ajoutés\n")
-                        trapcoins_handler(type="add", userid=str(key), trapcoins_val=int(winned))
+                        await self.bot.trapcoin_handler.add(userid=int(key), amount=int(winned), wallet='trapcoins')
                         mention = f"- **<@{key}>** :"
                         field += f"{mention}`{afficher_nombre_fr(int(calculer_pourcentage(float(user_epergne), float(interest_mult))))}` {str(trapcoins_emoji)}\n"
                         added += 1
@@ -284,7 +285,6 @@ class Tasks(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def check_users_xp(self):
-            # data = load_json_data(item="trapeur")
             data = await Trapardeur(pool=self.bot.pool).get_all()
             for i in data:
                 try:
