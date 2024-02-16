@@ -1,6 +1,5 @@
 import discord, os,base64, json
 from bs4 import BeautifulSoup
-from discord_webhook import DiscordWebhook
 from discord.ext import commands
 from bot import Trapard
 from uuid import uuid4

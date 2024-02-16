@@ -1,4 +1,4 @@
-from .utils.functions import LogErrorInWebhook, command_counter,convert_k_m_to_int, create_embed, write_item, trapcoins_handler, afficher_nombre_fr, load_json_data, lol_player_in_game, display_big_nums
+from .utils.functions import LogErrorInWebhook, command_counter,convert_k_m_to_int, create_embed, write_item, afficher_nombre_fr, load_json_data, lol_player_in_game, display_big_nums
 from .utils.path import G_STATS
 from discord.ext import commands
 import discord, random, json
@@ -114,7 +114,7 @@ class RouletteGame(commands.Cog):
                     self.serverid = serverid
                     self.winning_number = winning_number
                     self.winning_color = winning_color
-                    self.player_balance, _ = trapcoins_handler(type="get", userid=str(self.inter.author.id))
+                    self.player_balance = player_balance
                     self.phase = phase
                     self.trapcoins_em = "<:trapcoins:1108725845339672597>"
                     self.wanted_game = wanted_game
@@ -406,11 +406,9 @@ class RouletteGame(commands.Cog):
 
                 async def end_game(self, win: bool, interaction: discord.Interaction):
                     if win:
-                        method = 'add'
+                        await self.bot.trapcoin_handler.add(userid=self.inter.author.id, amount=self.gains, wallet="trapcoins")
                     else:
-                        method = 'remove'
-                    print(method, self.gains)
-                    trapcoins_handler(type=method, userid=str(self.inter.author.id), trapcoins_val=self.gains)
+                        await self.bot.trapcoin_handler.remove(userid=self.inter.author.id, amount=self.gains, wallet="trapcoins")
                     last_nums = load_json_data(item="roulette-history")
                     last_nums.append(int(self.winning_number))
                     last_nums = last_nums[-36:]
@@ -418,10 +416,11 @@ class RouletteGame(commands.Cog):
                     e = get_last_20_numbers_embed()
                     del self.bot.user_locks[interaction.user.id]
                     editGstats(userID=self.inter.author.id, total_gains=self.bet_amount * self.payouts[self.wanted_game], total_pertes=None, transfert=None, claims=None, win_alpha=None, nb_games=1, biggest_win=self.bet_amount * self.payouts[self.wanted_game])
+                    tr, ep = await self.bot.trapcoin_handler.get(userid=self.inter.author.id)
                     if win:
-                        embed = create_embed(title="G-roulette", description=f"🤑<@{self.inter.author.id}> **- Bravo tu as gagné, en {self.wanted_game} {display_big_nums(int(self.bet_amount * self.payouts[self.wanted_game]))}  {self.trapcoins_em} || ({afficher_nombre_fr(self.bet_amount * self.payouts[self.wanted_game])} {self.trapcoins_em}) || 🤑**\n\n{e}\n\n- Tu as {display_big_nums(int(trapcoins_handler(type='get', userid=str(self.inter.author.id))[0]))} {self.trapcoins_em} || ({afficher_nombre_fr(trapcoins_handler(type='get', userid=str(self.inter.author.id))[0])}) {self.trapcoins_em} || en poche.\n- Et {display_big_nums(int(trapcoins_handler(type='get', userid=str(self.inter.author.id))[1]))} {self.trapcoins_em} || ({afficher_nombre_fr(trapcoins_handler(type='get', userid=str(self.inter.author.id))[1])}) {self.trapcoins_em}) || en épargne.", suggestions=["g-roulette", "g-balance", "g-stats"])
+                        embed = create_embed(title="G-roulette", description=f"🤑<@{self.inter.author.id}> **- Bravo tu as gagné, en {self.wanted_game} {display_big_nums(int(self.bet_amount * self.payouts[self.wanted_game]))}  {self.trapcoins_em} || ({afficher_nombre_fr(self.bet_amount * self.payouts[self.wanted_game])} {self.trapcoins_em}) || 🤑**\n\n{e}\n\n- Tu as {display_big_nums(tr)} {self.trapcoins_em} || ({afficher_nombre_fr(tr)}) {self.trapcoins_em} || en poche.\n- Et {display_big_nums(int(ep))} {self.trapcoins_em} || ({afficher_nombre_fr(ep)}) {self.trapcoins_em}) || en épargne.", suggestions=["g-roulette", "g-balance", "g-stats"])
                     else:
-                        embed = create_embed(title="G-roulette", description=f"💸 <@{self.inter.author.id}> **- Sad tu as perdu, en {self.wanted_game} {display_big_nums(int(self.bet_amount))} {self.trapcoins_em} || ({afficher_nombre_fr(self.bet_amount)} {self.trapcoins_em}) ||  💸**\n\n- Le bon numéro étais **{self.winning_number}**.\n- **Vous avez parié sur {self.bet_on}.**\n\n- {e}\n\n- Tu as {display_big_nums(int(trapcoins_handler(type='get', userid=str(self.inter.author.id))[0]))} {self.trapcoins_em} || ({afficher_nombre_fr(trapcoins_handler(type='get', userid=str(self.inter.author.id))[0])}) {self.trapcoins_em} || en poche.\n- Et {display_big_nums(int(trapcoins_handler(type='get', userid=str(self.inter.author.id))[1]))} {self.trapcoins_em} || ({afficher_nombre_fr(trapcoins_handler(type='get', userid=str(self.inter.author.id))[1])}) {self.trapcoins_em}) || en épargne.")
+                        embed = create_embed(title="G-roulette", description=f"💸 <@{self.inter.author.id}> **- Sad tu as perdu, en {self.wanted_game} {display_big_nums(int(self.bet_amount))} {self.trapcoins_em} || ({afficher_nombre_fr(self.bet_amount)} {self.trapcoins_em}) ||  💸**\n\n- Le bon numéro étais **{self.winning_number}**.\n- **Vous avez parié sur {self.bet_on}.**\n\n- {e}\n\n- Tu as {display_big_nums(tr)} {self.trapcoins_em} || ({afficher_nombre_fr(tr)}) {self.trapcoins_em} || en poche.\n- Et {display_big_nums(ep)} {self.trapcoins_em} || ({afficher_nombre_fr(ep)}) {self.trapcoins_em}) || en épargne.")
 
                     view = Roulette(inter=ctx, serverid=ctx.guild.id, winning_color=self.winning_color, winning_number=self.winning_number, player_balance=self.player_balance, phase=5, bot=self.bot)
                     return await interaction.message.edit(embed=embed, view=view)
@@ -449,7 +448,7 @@ class RouletteGame(commands.Cog):
         if ctx.channel.name == "général" or ctx.channel.name == "lol-games-reward":
             embed = create_embed(title="Erreur", description="Merci de ne pas utiliser les channels général et lol-games-reward pour le g-roulette.")
             return await ctx.send(embed=embed, ephemeral=True)
-        player_balance, _ = trapcoins_handler(type="get", userid=str(ctx.author.id))
+        player_balance, _ = await self.bot.trapcoin_handler.get(userid=ctx.author.id)
         if player_balance == 0:
             del self.bot.user_locks[ctx.author.id]
             embed = create_embed(title="G-roulette", description="Il semble que tu n'aies plus de pièces...")
@@ -463,8 +462,8 @@ class RouletteGame(commands.Cog):
 
         e = get_last_20_numbers_embed()
         trapcoins_emoji = "<:trapcoins:1108725845339672597>"
-        view1 = Roulette(inter=ctx, serverid=ctx.guild.id, player_balance=trapcoins_handler(type="get", userid=str(ctx.author.id))[0], phase=1, bot=self.bot)
-        embed = create_embed(title="G-roulette", description=f"<@{ctx.author.id}>,\n\n- Tu as **{afficher_nombre_fr(int(trapcoins_handler(type='get', userid=str(ctx.author.id))[0]))}** Trapcoins {trapcoins_emoji}.\n\n- Quel est le type de pari ?\n\n- {e}")
+        view1 = Roulette(inter=ctx, serverid=ctx.guild.id, player_balance=player_balance, phase=1, bot=self.bot)
+        embed = create_embed(title="G-roulette", description=f"<@{ctx.author.id}>,\n\n- Tu as **{afficher_nombre_fr(player_balance)}** Trapcoins {trapcoins_emoji}.\n\n- Quel est le type de pari ?\n\n- {e}")
         await ctx.send(embed=embed, view=view1)
         # interaction = await view1.wait()
 

@@ -2,7 +2,7 @@ import discord, os, datetime, io, threading, asyncio
 from discord.ext import commands, tasks
 from typing import TYPE_CHECKING, Tuple
 from PIL import ImageDraw, ImageFont, Image
-from .utils.functions import trapcoins_handler, afficher_nombre_fr, display_big_nums, LogErrorInWebhook, create_embed, calc_usr_gain_by_tier
+from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWebhook, calc_usr_gain_by_tier
 from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH
 from bot import Trapard
 
@@ -482,56 +482,49 @@ class LolGames(commands.Cog):
                 else:
                     return''
 
-            def calculate_gain(game_data, game_duartion, userid):
+            async def calculate_gain(game_data, game_duartion, userid):
 
                 text_data = ""
                 texte_to_send = None
                 trapcoins_emoji = "<:trapcoins:1108725845339672597>"
+                user_balance, _ = await self.bot.trapcoin_handler.get(userid=int(userid))
                 if game_data["win"] == True:
                     base_gain = 50000
                     text_data += f"- Victoire: 50 000 {str(trapcoins_emoji)}\n"
                     if int(userid) in self.bot.lol_bet_dict and self.bot.lol_bet_dict[int(userid)] is not None:
                         if self.bot.lol_bet_dict[int(userid)][0] == "Gagner":
-                            user_balance, _ = trapcoins_handler(type="get", userid=str(userid))
                             if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(self.bot.lol_bet_dict[int(userid)][1]))
+                                await self.bot.trapcoin_handler.add(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
                                 texte_to_send = f"- 🤑 Tu as gagné **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Victoire**!"
                             else:
                                 texte_to_send = f"- Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Victoire**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             self.bot.lol_bet_dict[int(userid)] = None
                         else:
-                            user_balance, _ = trapcoins_handler(type="get", userid=str(userid))
                             if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                trapcoins_handler(type="remove", userid=str(userid), trapcoins_val=int(self.bot.lol_bet_dict[int(userid)][1]))
+                                await self.bot.trapcoin_handler.remove(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
                                 texte_to_send = f"💸 - Tu as perdu **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Défaite** alors que tu as gagné!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             else:
                                 texte_to_send = f"Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Défaite**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             self.bot.lol_bet_dict[int(userid)] = None
 
-
                 if game_data["win"] == False:
                     base_gain = 0
                     if int(userid) in self.bot.lol_bet_dict and self.bot.lol_bet_dict[int(userid)] is not None:
                         if self.bot.lol_bet_dict[int(userid)][0] == "Perdu":
-                            
-                            user_balance, _ = trapcoins_handler(type="get", userid=str(userid))
                             if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(self.bot.lol_bet_dict[int(userid)][1]))
+                                await self.bot.trapcoin_handler.add(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
                                 texte_to_send = f"🤑 - Tu as gagné **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Défaite**!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             else:
                                 texte_to_send = f"- Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\n- Tu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Défaite**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-
-
                             self.bot.lol_bet_dict[int(userid)] = None
                         else:
-                            user_balance, _ = trapcoins_handler(type="get", userid=str(userid))
                             if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                trapcoins_handler(type="add", userid=str(userid), trapcoins_val=int(self.bot.lol_bet_dict[int(userid)][1]))
+                                await self.bot.trapcoin_handler.remove(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
                                 texte_to_send = f"💸 - Tu as perdu **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Victoire** alors que tu as perdu!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             else:
                                 texte_to_send = f"Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Victoire**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
                             self.bot.lol_bet_dict[int(userid)] = None
-
+                
                 pings = game_data["allInPings"] + game_data ["assistMePings"] + game_data["baitPings"] + game_data["basicPings"] + game_data["commandPings"] + game_data['dangerPings'] + game_data["enemyMissingPings"] + game_data["enemyVisionPings"] + game_data["getBackPings"] + game_data["holdPings"] + game_data['needVisionPings'] + game_data["pushPings"] + game_data['visionClearedPings'] + game_data["onMyWayPings"]
                 if pings > 0:
                     pings_calc = pings * 200
@@ -793,10 +786,9 @@ class LolGames(commands.Cog):
                                     pass
                                 try:
                                     if mentions != "?":
-                                        gains, text, _, texte_to_send = calculate_gain(match_data, game_duration, mentions)
-                                        trapcoins_handler(type="add", userid=str(mentions), trapcoins_val=int(gains))
+                                        gains, text, _, texte_to_send = await calculate_gain(match_data, game_duration, mentions)
                                         tier_bonus = calc_usr_gain_by_tier(int(mentions))
-                                        trapcoins_handler(type="add", userid=str(mentions), trapcoins_val=tier_bonus)
+                                        await self.bot.trapcoin_handler.add(userid=int(mentions), amount=(int(gains)+tier_bonus), wallet="trapcoins")
                                 except:
                                     gains = 0
                                     text = ""
