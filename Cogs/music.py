@@ -10,6 +10,7 @@ from asyncio import sleep
 from bot import Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_txt_to_colored
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
+from .utils.context import Context as CustomContext
 import traceback, re, random, os, asyncio, threading, base64
 from asqlite import Pool
 
@@ -1298,8 +1299,20 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
                 messages = await getMusicQueue(interaction.guild_id, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(messages, interaction.guild_id, interaction, music_controler=self.music_controler,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
                 await interaction.channel.send(view=view)
-            # elif button.custom_id == "mlist":
-            #     await mlist.callback(interaction)
+            elif button.custom_id == "mlist":
+                await command_counter(user_id=str(interaction.user.id), bot=self.bot)
+                options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
+                for unique in self.bot.unique_downloader:
+                    user = await self.bot.fetch_user(int(unique))
+                    if user:
+                        name = user.display_name
+                        options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
+                else:
+                    drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot, music_controler=self.music_controler)
+                    mlist = await self.music_list_handler.getMList()
+                    view = QueueBtn(mlist, len(mlist), interaction)
+                    view.add_item(drop)
+                    await interaction.followup.send(embed=mlist[0], view=view)
             elif button.custom_id == "skip":
                 if self.music_controler.voice_clients[self.serverid] is None:
                     return await interaction.followup.send("Trapard est dans aucun vocal, tu es one head ou quoi ?", ephemeral=True)
@@ -1541,7 +1554,7 @@ class PlayAllMoreOptions(discord.ui.View):
 
 class DropDownMlist(discord.ui.Select): # Youtube Select
     try:
-        def __init__(self, ctx, options: list[discord.SelectOption], bot: Trapard, music_controler: MusicController):
+        def __init__(self, ctx: commands.Context, options: list[discord.SelectOption], bot: Trapard, music_controler: MusicController):
             super().__init__(placeholder='Choisis une des musiques 🦈', options=options, max_values=1, min_values=1)
             self.ctx = ctx
             self.bot = bot
@@ -2138,10 +2151,13 @@ class Music(commands.Cog):
 # END PLAY GROUP
 
     @commands.hybrid_command() #old: /mlist
-    async def mlist(self, interaction: commands.Context):
+    async def mlist(self, ctx: commands.Context):
         """Affiche la liste de toutes les musiques."""
+        if not isinstance(ctx, CustomContext):
+            try: await ctx.interaction.response.defer()
+            except: print("error defer")
         try:
-            await command_counter(user_id=str(interaction.author.id), bot=self.bot)
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
             for unique in self.bot.unique_downloader:
                 user = await self.bot.fetch_user(int(unique))
@@ -2149,11 +2165,11 @@ class Music(commands.Cog):
                     name = user.display_name
                     options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
             else:
-                drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot, music_controler=self.music_controler)
+                drop = DropDownMlist(ctx=ctx, options=options, bot=self.bot, music_controler=self.music_controler)
                 mlist = await self.music_list_handler.getMList()
-                view = QueueBtn(mlist, len(mlist), interaction)
+                view = QueueBtn(mlist, len(mlist), ctx)
                 view.add_item(drop)
-                await interaction.send(embed=mlist[0], view=view)
+                await ctx.send(embed=mlist[0], view=view)
         except:
             LogErrorInWebhook()
 
