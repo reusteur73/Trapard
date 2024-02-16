@@ -7,7 +7,7 @@ import discord
 from discord.ui import Modal, TextInput
 from time import perf_counter
 from asyncio import sleep
-from bot import PLAYLIST_LIST, Trapard
+from bot import Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_txt_to_colored
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
 import traceback, re, random, os, asyncio, threading, base64
