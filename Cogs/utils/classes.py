@@ -1,6 +1,8 @@
 import asqlite, discord, random
 # from bot import Trapard
 from .functions import LogErrorInWebhook, getUserById
+from typing import Literal
+from asqlite import Pool
 
 class Trapardeur:
     """Gestion de la DB Trapardeur. DB Structure: `userId:str`, `vocalTime:int`, `messageSent:int`, `commandSent:int`"""
@@ -126,4 +128,59 @@ class CallFriends(discord.ui.View):
             return
     except Exception as e:
         LogErrorInWebhook()
+
+class TrapcoinsHandler:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def create_user(self, userid: int):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO (trapcoins userid, trapcoins, epargne) VALUES (?,?,?)", (userid, 0, 0,))
+        return True
+    async def get(self, userid: int):
+        """Return `trapcoins`, `epargne`."""
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT trapcoins, epargne FROM trapcoins WHERE userid = ?", (userid,))
+        if data:
+            return data[0], data[1]
+        return "Unknown user", "Unknown user"
+
+    async def add(self, userid: int, amount: int, wallet: Literal["epargne", "trapcoins"]):
+        """Add trapcoins to given wallet"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if wallet == "epargne":
+                    await conn.execute("UPDATE trapcoins SET epargne = epargne + ? WHERE userid = ?", (amount, userid,))
+                elif wallet == "trapcoins":
+                    await conn.execute("UPDATE trapcoins SET trapcoins = trapcoins + ? WHERE userid = ?", (amount, userid,))
+        return True
+    
+    async def remove(self, userid: int, amount: int, wallet: Literal["epargne", "trapcoins"]):
+        """Remove trapcoins to given wallet"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if wallet == "epargne":
+                    await conn.execute("UPDATE trapcoins SET epargne = epargne - ? WHERE userid = ?", (amount, userid,))
+                elif wallet == "trapcoins":
+                    await conn.execute("UPDATE trapcoins SET trapcoins = trapcoins - ? WHERE userid = ?", (amount, userid,))
+        return True
+
+    async def transfer(self, userid: int, amount: int, operation: Literal["ep_to_tr", "tr_to_ep"]):
+        """Move trapcoins from epargne or trapcoins to the other one."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if operation == "ep_to_tr":
+                    await conn.execute("UPDATE trapcoins SET epargne = epargne - ? WHERE userid = ?", (amount, userid,))
+                    await conn.execute("UPDATE trapcoins SET trapcoins = trapcoins + ? WHERE userid = ?", (amount, userid,))
+                elif operation == "tr_to_ep":
+                    await conn.execute("UPDATE trapcoins SET trapcoins = trapcoins - ? WHERE userid = ?", (amount, userid,))
+                    await conn.execute("UPDATE trapcoins SET epargne = epargne + ? WHERE userid = ?", (amount, userid,))
+        return True
+
+    async def baltop(self):
+        """Return `list`: `[[user1, trap, ep], [user2, trap, ep]]`"""
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT userid, trapcoins, epargne FROM ( SELECT userid, trapcoins, 0 AS epargne FROM trapcoins UNION SELECT userid, 0 AS trapcoins, epargne FROM trapcoins ) AS combined ORDER BY trapcoins + epargne DESC LIMIT 25;")
+        return data
 
