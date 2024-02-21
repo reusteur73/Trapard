@@ -46,8 +46,7 @@ def convert_to_minutes_seconds(music_len_sec: str, just_int:bool=False):
     except Exception as e:
         LogErrorInWebhook()
 
-async def getMusicQueue(server_id, current, bot: Trapard, unique_downloader, music_list_handler):
-
+async def getMusicQueue(server_id, bot: Trapard, music_list_handler, current_song_time=0):
     try:
         if server_id not in bot.music_queues:
             return "Il n'y a pas de musiques dans la file d'attente."
@@ -63,7 +62,6 @@ async def getMusicQueue(server_id, current, bot: Trapard, unique_downloader, mus
         for page in range(total_pages):
             embed = discord.Embed(title="File d'attente de musiques")
             if server_id in bot.current_track:
-                global current_song_time
                 track = bot.current_track[server_id]
                 index, dler = await music_list_handler.get_index_by_music_name(str(track))
                 track_duration = await music_list_handler.get_song_duration_by_index(index)
@@ -687,7 +685,7 @@ class SuggestionPlay(discord.ui.View):
                     vc = await user_vocal.connect()
                     self.music_controler.voice_clients[interaction.guild.id] = vc
                     await self.music_controler.add_to_queue(interaction.guild.id, name)
-                    await self.music_controler.play_music(interaction.guild.id, vc=vc)
+                    await self.music_controler.play_music(interaction.guild.id)
                 embed = create_embed(title="Musique", description=f"`{name}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
                 return await interaction.followup.send(embed=embed)
             elif cmd == "playnext":
@@ -889,7 +887,7 @@ class QueueBtn(discord.ui.View): # Queue List Buttons
     except Exception as e:
         LogErrorInWebhook()
 
-class MusicController():
+class MusicController:
     try:
         def __init__(self, bot: Trapard, music_list_handler: MusicList_Handler,unique_downloader, music_session):
             self.bot = bot
@@ -900,79 +898,152 @@ class MusicController():
             self.music_session = music_session
             self.current_song = {}
             self.current_song_status = {}
+            self.curent_timecode = 0
 
-        async def play_next(self, server_id):
+            self.hypno_emoji = "<a:hypnotise:1126218362649858078>"
+            self.rave_emoji = "<a:rave:1124099238163394632>"
+            self.cool_emoji = "<a:cooldoge:1124120143648260126>"
+            self.jam_emoji = "<a:pepeJam:1124371017402429460>"
+            self.pourcent_em = "<:percent:1125746991247409202>"
+
+
+
+        async def play_music(self, server_id: int):
+            try:
+                time_old, reducer = 0, 0
+                
+                messages = await getMusicQueue(server_id=server_id, music_list_handler=self.music_list_handler, bot=self.bot)
+                view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
+
+                song_infos = await self._setup_current_song_info(server_id=server_id)
+                
+                vc: discord.VoiceClient = song_infos['vc']
+                vc.play(song_infos['source'])
+                vc.source = discord.PCMVolumeTransformer(vc.source)
+                
+                start_time = perf_counter()
+                
+                response = await self._display_current_song_info(server_id=server_id, view=view)
+                if isinstance(response, tuple):
+                    track, dler, index, field, track_duration, zic_chann = response
+                else: return "Erreur..."
+                
+                # Song start playing
+                while vc.is_playing():
+                    await self._check_soundboard_status(server_id=server_id, track=track, dler=dler, index=index, reducer=reducer, view=view, field=field)
+                    time_old = await self._update_playing_status(server_id=server_id, track=track, dler=dler, index=index, start_time=start_time, messages=messages,reducer=reducer,track_duration=track_duration,zic_chann=zic_chann,vc=vc,time_old=time_old, field=field)
+                
+                # Song is ended
+                await self._end_playing_song(server_id=server_id, track_duration=track_duration, track=track,index=index,dler=dler,vc=vc)
+            except Exception as e:
+                print(e)
+                LogErrorInWebhook()
+
+        async def _setup_current_song_info(self, server_id):
+            songs_info = {"error": False}
             if server_id not in self.voice_clients:
-                # Return an error message or raise an exception if the bot is not connected to a voice channel for this server
-                return "Je ne suis pas connecté à un canal vocal pour ce serveur."
-            vc = self.voice_clients[server_id]
-            await self.play_music(server_id, vc)
-
-        def get_current_playing_song(self, server_id):
-            return self.current_song[server_id], self.current_song_status[server_id]['c_time']
-
-        async def play_music(self, server_id: int, vc: discord.VoiceClient):
-            if server_id not in self.voice_clients:
-                return "Je ne suis pas connecté à un canal vocal pour ce serveur."
-            vc = self.voice_clients[server_id]
+                songs_info['error'] = True
+                # return "Je ne suis pas connecté à un canal vocal pour ce serveur."
+            vc: discord.VoiceClient = self.voice_clients[server_id]
+            songs_info['vc'] = self.voice_clients[server_id]
             if len(self.bot.music_queues[server_id]) == 0:
-                return "Il n'y a pas de musique dans la file d'attente."
-            name = self.bot.music_queues[server_id].pop(0)
-            if name is not False:
-                music_path = MUSICS_FOLDER + name + ".mp3"
+                songs_info['error'] = True
+                # return "Il n'y a pas de musique dans la file d'attente."
+            songs_info['name'] = self.bot.music_queues[server_id].pop(0)
+            if songs_info['name'] is not False:
+                songs_info['music_path'] = MUSICS_FOLDER + songs_info['name'] + ".mp3"
             else:
-                return "La musique n'existe pas."
+                songs_info['error'] = True
+                # return "La musique n'existe pas."
             
             if server_id not in self.bot.current_track:
-                self.bot.current_track[server_id] = name
+                self.bot.current_track[server_id] = songs_info['name']
             else:
-                self.bot.current_track[server_id] = name
+                self.bot.current_track[server_id] = songs_info['name']
             if server_id not in self.music_session:
                 self.music_session[server_id] = {'music_played': 0, 'time': 0, 'paused': {'status': False, 'sound_time': 0}}
 
-            self.current_song[server_id] = music_path
+            self.current_song[server_id] = songs_info['music_path']
 
-            source = discord.FFmpegPCMAudio(music_path)
+            songs_info['source'] = discord.FFmpegPCMAudio(songs_info['music_path'])
+            return songs_info
+
+        async def _display_current_song_info(self, server_id, view):
+            guild = self.bot.get_guild(server_id)
+            zic_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text)
+            if zic_chann is None:
+                return None
+            track = self.bot.current_track[server_id]
+            index = await self.music_list_handler.get_index_by_music_name(track)
             try:
-                vc.play(source)
-                vc.source = discord.PCMVolumeTransformer(vc.source)
-            except Exception as e:
-                print(e)
-                pass
-            # Wait for the song to finish playing before playing the next one
-            try:
-                hypno_emoji = "<a:hypnotise:1126218362649858078>"
-                rave_emoji = "<a:rave:1124099238163394632>"
-                cool_emoji = "<a:cooldoge:1124120143648260126>"
-                jam_emoji = "<a:pepeJam:1124371017402429460>"
-                global current_song_time                
-                current_song_time = 0
-                time_old = 0
-                messages = await getMusicQueue(server_id=server_id, current=None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
-                view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
-                guild = self.bot.get_guild(server_id)
-                zic_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text)
-                if zic_chann is None:
-                    return
-                track = self.bot.current_track[server_id]
-                index = await self.music_list_handler.get_index_by_music_name(track)
+                dler = self.bot.unique_downloader_display_names[(int(index[1]))]
+            except:
+                dler = "Inconnu"
                 try:
-                    dler = self.bot.unique_downloader_display_names[(int(index[1]))]
+                    user = self.bot.get_user(int(index[1]))
+                    dler = user.display_name
                 except:
-                    dler = "Inconnu"
-                    try:
-                        user = self.bot.get_user(int(index[1]))
-                        dler = user.display_name
-                    except:
-                        dler = "Inconnu2"
-                track_duration = await self.music_list_handler.get_song_duration_by_index(str(index[0]))
-                self.current_song_status[server_id] = {'c_time': 0, 't_time': int(track_duration)}
-                pbar = create_progress_bar(current_song_time, int(track_duration), bar_length=30)
-                dur = convert_to_minutes_seconds(str(current_song_time)) + " /" + convert_to_minutes_seconds(str(track_duration))
-                embed = create_embed(title=f"Musique actuelle 🎝 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}**\n\n- `{pbar}`\n\n- `                 {convert_str_to_emojis(dur)}`")
-                self.current_song_pbar = await zic_chann.send(embed=embed, view=view)
-                self.last_message = self.current_song_pbar
-                next_musics = None
+                    dler = "Inconnu2"
+            track_duration = await self.music_list_handler.get_song_duration_by_index(str(index[0]))
+            self.current_song_status[server_id] = {'c_time': 0, 't_time': int(track_duration)}
+            pbar = create_progress_bar(self.curent_timecode, int(track_duration), bar_length=30)
+            dur = convert_to_minutes_seconds(str(self.curent_timecode)) + " /" + convert_to_minutes_seconds(str(track_duration))
+            embed = create_embed(title=f"Musique actuelle 🎝 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}**\n\n- `{pbar}`\n\n- `                 {convert_str_to_emojis(dur)}`")
+            self.current_song_pbar = await zic_chann.send(embed=embed, view=view)
+            self.last_message = self.current_song_pbar
+            next_musics = None
+            field = ""
+            if server_id in self.bot.music_queues and len(self.bot.music_queues[server_id]) > 0:
+                next_musics = self.bot.music_queues[server_id]
+                field += f"\n\n**3 prochaines musiques** : ({len(self.bot.music_queues[server_id])} musiques en queue)\n"
+                for i, next_music in enumerate(next_musics):
+                    if i == 0:
+                        c = 'green'
+                    elif i == 1:
+                        c = 'pink'
+                    else:
+                        c = 'white'
+                    field += f'{convert_txt_to_colored(text=next_music, color=c, background="dark")}'
+                    if i == 2: break
+            else:
+                field += "\n\nAucune musique à venir. </play:1103411566558322753>"
+            return track, dler, index, field, track_duration, zic_chann
+
+        async def _check_soundboard_status(self, server_id, track, dler, index, view, reducer,field):
+            while self.music_session[server_id]['paused']['status'] == True:
+                txt = f"Lecture en pause par la SoundBoard pour {self.music_session[server_id]['paused']['sound_time']} secondes!"
+                embed = create_embed(title=f"Musique actuelle 🎜 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n{convert_txt_to_colored(text=txt, color='red', background='dark')}{field}")    
+                await self.current_song_pbar.edit(embed=embed, view=view)
+                self.music_session[server_id]['paused']['sound_time'] -= 1
+                await asyncio.sleep(1)
+                reducer += 1
+                if reducer >= 30:
+                    self.music_session[server_id]['paused']['status'] == False
+                    break
+
+        async def _update_playing_status(self, server_id, track, dler, index, start_time,messages,reducer,track_duration,zic_chann: discord.TextChannel,vc:discord.VoiceClient,time_old, field):
+            view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
+            time_old += 1
+            current_time = perf_counter() - start_time
+            if reducer > 0:
+                current_time -= reducer
+            self.current_song_status[server_id]['c_time'] = int(current_time)
+            pourcent =  str(int(current_time * 100 / int(track_duration)))
+            if int(pourcent) > 100:
+                # Stop or skip here
+                pass
+            self.curent_timecode = int(current_time)
+            pbar = create_progress_bar(self.curent_timecode, int(track_duration), bar_length=30)
+            dur = convert_to_minutes_seconds(str(self.curent_timecode)) + " /" + convert_to_minutes_seconds(track_duration)
+            if time_old % 4 == 0:
+                try:
+                    activity = discord.CustomActivity(
+                        name = "Custom Status", # leave this like this
+                        state = f"{pourcent}% - {track}", # edit this
+                    )
+                    await self.bot.change_presence(activity=activity)
+                except:
+                    pass
                 field = ""
                 if server_id in self.bot.music_queues and len(self.bot.music_queues[server_id]) > 0:
                     next_musics = self.bot.music_queues[server_id]
@@ -987,127 +1058,84 @@ class MusicController():
                         field += f'{convert_txt_to_colored(text=next_music, color=c, background="dark")}'
                         if i == 2: break
                 else:
-                    field += "\n\nAucune musique à venir. </play:1103411566558322753>"
-            except Exception as e:
-                LogErrorInWebhook()
-            start_time = perf_counter()
-            reducer = 0
-            pourcent_em = "<:percent:1125746991247409202>"
-            while vc.is_playing():
-                while self.music_session[server_id]['paused']['status'] == True:
-                    txt = f"Lecture en pause par la SoundBoard pour {self.music_session[server_id]['paused']['sound_time']} secondes!"
-                    embed = create_embed(title=f"Musique actuelle 🎜 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {hypno_emoji}\n\n{convert_txt_to_colored(text=txt, color='red', background='dark')}{field}")    
-                    await self.current_song_pbar.edit(embed=embed, view=view)
-                    self.music_session[server_id]['paused']['sound_time'] -= 1
-                    await asyncio.sleep(1)
-                    reducer += 1
-                    if reducer >= 30:
-                        self.music_session[server_id]['paused']['status'] == False
-                        break
-                view = PlayAllView(messages, server_id, ctx=discord.Interaction, music_controler=self,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
-                await sleep(0.55)
-                time_old += 1
-                current_time = perf_counter() - start_time
-                if reducer > 0:
-                    current_time -= reducer
-                    # reducer = 0
-                self.current_song_status[server_id]['c_time'] = int(current_time)
-                pourcent =  str(int(current_time * 100 / int(track_duration)))
-                current_song_time = int(current_time)
-                pbar = create_progress_bar(current_song_time, int(track_duration), bar_length=30)
-                dur = convert_to_minutes_seconds(str(current_song_time)) + " /" + convert_to_minutes_seconds(track_duration)
-                if time_old % 4 == 0:
-                    try:
-                        activity = discord.CustomActivity(
-                            name = "Custom Status", # leave this like this
-                            state = f"{pourcent}% - {track}", # edit this
-                        )
-                        await self.bot.change_presence(activity=activity)
-                    except:
-                        pass
-                    field = ""
-                    if server_id in self.bot.music_queues and len(self.bot.music_queues[server_id]) > 0:
-                        next_musics = self.bot.music_queues[server_id]
-                        field += f"\n\n**3 prochaines musiques** : ({len(self.bot.music_queues[server_id])} musiques en queue)\n"
-                        for i, next_music in enumerate(next_musics):
-                            if i == 0:
-                                c = 'green'
-                            elif i == 1:
-                                c = 'pink'
-                            else:
-                                c = 'white'
-                            field += f'{convert_txt_to_colored(text=next_music, color=c, background="dark")}'
-                            if i == 2: break
-                    else:
-                        field += "\n\n**Aucune musique à venir**. </play:1103411566558322753>"
-                    self.last_message = await get_latest_message_from_channel(zic_chann)
-                latency = vc.latency
-                if latency == float('inf'):
-                    latency = "N/A"
-                else:
-                    latency = f"{int(round(latency*1000, 2))}ms"
-                if time_old % 2 == 0:
-                    embed = create_embed(title=f"Musique actuelle 🎝 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {hypno_emoji}\n\n- `{pbar}`\n- {jam_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {pourcent_em}          {cool_emoji}{field}\n\n                _Ping: {latency}_")
-                else:
-                    embed = create_embed(title=f"Musique actuelle 🎜 {rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {hypno_emoji}\n\n- `{pbar}`\n- {cool_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {pourcent_em}          {jam_emoji}{field}\n\n                _Ping: {latency}_")    
-                if self.current_song_pbar.id !=  self.last_message.id:
+                    field += "\n\n**Aucune musique à venir**. </play:1103411566558322753>"
+                self.last_message = await get_latest_message_from_channel(zic_chann)
+            latency = vc.latency
+            if latency == float('inf'):
+                latency = "N/A"
+            else:
+                latency = f"{int(round(latency*1000, 2))}ms"
+            if time_old % 2 == 0:
+                embed = create_embed(title=f"Musique actuelle 🎝 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n- `{pbar}`\n- {self.jam_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {self.pourcent_em}          {self.cool_emoji}{field}\n\n                _Ping: {latency}_")
+            else:
+                embed = create_embed(title=f"Musique actuelle 🎜 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n- `{pbar}`\n- {self.cool_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {self.pourcent_em}          {self.jam_emoji}{field}\n\n                _Ping: {latency}_")    
+        
+            if self.current_song_pbar.id !=  self.last_message.id:
+                if time_old % 10 == 0:
                     await self.current_song_pbar.delete()
                     self.current_song_pbar = await zic_chann.send(embed=embed, view=view)
                     self.last_message = self.current_song_pbar
                 else:
                     await self.current_song_pbar.edit(embed=embed, view=view)
-            # Song is ended
-            # Code to store song stats
-            #
+            else:
+                await self.current_song_pbar.edit(embed=embed, view=view)
+            await sleep(0.75)
+            return time_old
+
+        async def _end_playing_song(self,server_id,track_duration,track,index,dler,vc:discord.VoiceClient ):
             try:
                 pbar = create_progress_bar(int(track_duration), int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(track_duration) + " /" + convert_to_minutes_seconds(track_duration)
                 embed = create_embed(title="Musique terminé 🔚", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par {dler}\n\n- `{pbar}`\n\n- `🎶                  {convert_str_to_emojis(dur)}                 🎶`", color=discord.Color.red())
                 await self.current_song_pbar.edit(embed=embed, view=None)
                 self.bot.last_music[server_id] = track
-            except Exception as e:
-                print("Erreur :", e)
-                traceback.print_exc()
-            try:
-                if current_song_time > 8:
-                    await self.save_song_stats(current_song_time, 1)
+                if self.curent_timecode > 8:
+                    await self.save_song_stats(self.curent_timecode, 1)
                     await IncrementMusicPlayed(TrackName=track, pool=self.bot.pool)
+                # Add stats to server session
+                if server_id in self.music_session:
+                    self.music_session[server_id]['music_played'] += 1
+                    self.music_session[server_id]['time'] += self.curent_timecode
+
+                # Check if there is still user in vc:
+                activity = discord.CustomActivity(
+                    name = "Custom Status", # leave this like this
+                    state = f"Bonne nuit", # edit this
+                )
+                if await check_voice_state(vc=vc) is True:
+                    del self.bot.music_queues[server_id]
+                    del self.voice_clients[server_id]
+                    await vc.disconnect()
+                    chann = self.bot.get_channel(server_id)
+                    await self.bot.change_presence(activity=activity)
+                    txt = f"Tout le monde est parti... La file d'attente a été réinitialisée.\n\nCette session, j'ai joué **{self.music_session[server_id]['music_played']} musiques**, pour un total de **{convert_to_minutes_seconds(self.music_session[server_id]['time'])}**."
+                    embed = create_embed(title="Fin de session", description=txt)
+                    try: del self.music_session[server_id]
+                    except: pass
+                    return await chann.send(embed=embed)
+                if len(self.bot.music_queues[server_id]) == 0:
+                    # Clear the music queue and disconnect from the voice channel if there are no more songs in the queue
+                    del self.bot.music_queues[server_id]
+                    await self.bot.change_presence(activity=activity)
+                    try: del self.voice_clients[server_id]
+                    except: pass
+                    try: del self.music_session[server_id]
+                    except: pass
+                    await vc.disconnect()
+                else:
+                    # Play the next song in the queue
+                    await self.play_next(server_id)
             except Exception as e:
                 LogErrorInWebhook()
 
-            # Add stats to server session
-            if server_id in self.music_session:
-                self.music_session[server_id]['music_played'] += 1
-                self.music_session[server_id]['time'] += current_song_time
+        def get_current_playing_song(self, server_id):
+            return self.current_song[server_id], self.current_song_status[server_id]['c_time']
 
-            # Check if there is still user in vc:
-            activity = discord.CustomActivity(
-                name = "Custom Status", # leave this like this
-                state = f"Bonne nuit", # edit this
-            )
-            if await check_voice_state(vc=vc) is True:
-                del self.bot.music_queues[server_id]
-                del self.voice_clients[server_id]
-                await vc.disconnect()
-                chann = self.bot.get_channel(server_id)
-                await self.bot.change_presence(activity=activity)
-                txt = f"Tout le monde est parti... La file d'attente a été réinitialisée.\n\nCette session, j'ai joué **{self.music_session[server_id]['music_played']} musiques**, pour un total de **{convert_to_minutes_seconds(self.music_session[server_id]['time'])}**."
-                embed = create_embed(title="Fin de session", description=txt)
-                try: del self.music_session[server_id]
-                except: pass
-                return await chann.send(embed=embed)
-            if len(self.bot.music_queues[server_id]) == 0:
-                # Clear the music queue and disconnect from the voice channel if there are no more songs in the queue
-                del self.bot.music_queues[server_id]
-                await self.bot.change_presence(activity=activity)
-                try: del self.voice_clients[server_id]
-                except: pass
-                try: del self.music_session[server_id]
-                except: pass
-                await vc.disconnect()
-            else:
-                # Play the next song in the queue
-                await self.play_next(server_id)
+        async def play_next(self, server_id):
+            if server_id not in self.voice_clients:
+                # Return an error message or raise an exception if the bot is not connected to a voice channel for this server
+                return "Je ne suis pas connecté à un canal vocal pour ce serveur."
+            await self.play_music(server_id)
 
         async def add_to_queue(self, server_id, name):
             if server_id not in self.bot.music_queues:
@@ -1174,7 +1202,7 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
     async def on_submit(self, interaction: commands.Context):
         self.user_input = self.feedback.value
         em_error = create_embed(title="Erreur", description="- Le numéro que tu as donné n'est pas bon !!\n\n- Voila comment utiliser `/play`\n\n- `/play 5`\n\n- `/play 12,3,5,25,25,3,1`", suggestions=["queue","mlist","playlist-play"])
-        messages = await getMusicQueue(interaction.guild.id, None, unique_downloader=self.music_controler.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+        messages = await getMusicQueue(server_id=interaction.guild.id, music_list_handler=self.music_list_handler, bot=self.bot)
         view = PlayAllView(messages, interaction.guild.id, interaction, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.music_controler.unique_downloader)
         if is_comma_separated(self.user_input) is True:
             wantedList, erreur = parse_user_indexs(self.user_input)
@@ -1194,7 +1222,6 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
                 return await interaction.send(embed=em_error)
 
         if interaction.guild.id in self.music_controler.voice_clients: # Trapard is playing 
-            vc = self.music_controler.voice_clients[interaction.guild.id]
             if is_comma_separated(self.user_input) is True: # Add multiple songs
                 if len(out) != 0:
                     if self.custom_id == "play-next":
@@ -1212,7 +1239,7 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
                 await self.music_controler.add_to_queue(interaction.guild.id, music_name) # Add the only song
             if self.custom_id == "play":
                 if len(self.bot.music_queues[interaction.guild.id]) < 1:
-                    await self.music_controler.play_music(server_id=interaction.guild.id, vc=vc)
+                    await self.music_controler.play_music(server_id=interaction.guild.id)
             embed = create_embed(title="Musique", description=f"`{music_name}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
             return await interaction.send(embed=embed, view=view)
 
@@ -1229,11 +1256,11 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
                     cleanList += "`"
                     embed = create_embed(title="Musique", description=f"Ajouté à la file : {cleanList}", suggestions=["queue","mlist","playlist-play"])
                     await interaction.send(embed=embed, view=view)
-                    return await self.music_controler.play_music(interaction.guild.id, vc=vc)
+                    return await self.music_controler.play_music(interaction.guild.id)
             await self.music_controler.add_to_queue(interaction.guild.id, music_name)
             embed = create_embed(title="Musique", description=f"Joue : {music_name}", suggestions=["queue","mlist","playlist-play"])
             await interaction.send(embed=embed, view=view)
-            return await self.music_controler.play_music(interaction.guild.id, vc=vc)
+            return await self.music_controler.play_music(interaction.guild.id)
         
     async def on_error(self, interaction: commands.Context, error: Exception) -> None:
         await interaction.send('Une erreur est survenue.', ephemeral=True)
@@ -1293,10 +1320,10 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
             try: await interaction.response.defer()
             except: pass
             if button.custom_id == "afficher_queue":
-                messages = await getMusicQueue(self.serverid, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(self.serverid, music_list_handler=self.music_list_handler, bot=self.bot)
                 queue_view = QueueBtn(messages, len(messages), ctx=self.ctx)
                 await interaction.channel.send(embed=messages[0], view=queue_view)
-                messages = await getMusicQueue(interaction.guild_id, None, unique_downloader=self.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(interaction.guild_id, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(messages, interaction.guild_id, interaction, music_controler=self.music_controler,music_session = self.music_session, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.unique_downloader)
                 await interaction.channel.send(view=view)
             elif button.custom_id == "mlist":
@@ -1432,11 +1459,11 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                 embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue aléatoirement ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
             else: 
                 embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
-            messages = await getMusicQueue(server_id, None, bot, bot.unique_downloader, music_list_handler)
+            messages = await getMusicQueue(server_id, bot, music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
             await ctx.send(embed=embed, view=view)
             if not vc.is_playing():
-                await music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                await music_controler.play_music(server_id=ctx.guild.id)
             return
         except Exception as e:
             print(e)
@@ -1597,11 +1624,13 @@ class DropDownMlist(discord.ui.Select): # Youtube Select
 
 class DropDown(discord.ui.Select):
     try:
-        def __init__(self, options, ctx, bot: Trapard, music_list_handler: MusicList_Handler):
+        def __init__(self, options, ctx, bot: Trapard, music_list_handler: MusicList_Handler, music_controler: MusicController, music_session: dict):
             super().__init__(placeholder='Choisis une des musiques 🦈', options=options, max_values=1, min_values=1)
             self.ctx = ctx
             self.bot = bot
             self.music_list_handler = music_list_handler
+            self.music_controler = music_controler
+            self.music_session=music_session
         async def callback(self, interaction: discord.Interaction):
             val = self.values[0]
             url = getVideoId(val)
@@ -1611,16 +1640,7 @@ class DropDown(discord.ui.Select):
             user = interaction.user
             await interaction.response.send_message(f"La musique {val} est en cours de téléchargement ! 🦈")
             user = str(user).split("#")[0]
-            if await download_from_url(url=url, 
-                                        user=user, 
-                                        channel_id=channel, 
-                                        userid=userid, serverid=serverid, 
-                                        cmd="search", 
-                                        ctx=self.ctx, 
-                                        bot=self.bot, 
-                                        music_list_handler=self.music_list_handler
-                                        
-                                        ) == True:
+            if await download_from_url(url=url, user=user, channel_id=channel, userid=userid, serverid=serverid,cmd="search", ctx=self.ctx, bot=self.bot, music_list_handler=self.music_list_handler,music_controler=self.music_controler,music_session=self.music_session) == True:
                 return
             else:
                 return await interaction.channel.send("Erreur lors du téléchargement ! 🦈")
@@ -2004,7 +2024,7 @@ class Music(commands.Cog):
             if isinstance(_musiques, discord.Embed):
                 return await ctx.send(embed=embed)
             elif isinstance(_musiques, list):
-                messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(server_id=ctx.guild.id, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
 
                 if not self.music_controler.is_vc(server_id=ctx.guild.id):
@@ -2018,7 +2038,7 @@ class Music(commands.Cog):
                 embed = create_embed(title="Musique", description=f"`{', '.join(_musiques)}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
                 await ctx.send(embed=embed, view=view)
                 if not vc.is_playing():
-                    await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                    await self.music_controler.play_music(server_id=ctx.guild.id)
                 return
             elif isinstance(_musiques, QuestionnaireMusicPlay):
                 return await ctx.send(_musiques)
@@ -2074,7 +2094,7 @@ class Music(commands.Cog):
         embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"])
         await ctx.send(embed=embed)
         if not vc.is_playing():
-            await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+            await self.music_controler.play_music(server_id=ctx.guild.id)
         return
 
     @play1.command(name='next') #old: /play-next
@@ -2085,12 +2105,12 @@ class Music(commands.Cog):
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             _musiques = await self.handler_music_input(index=index, musique_name=musique_name, channel_name=ctx.channel.name, author_id=ctx.author.id, author_voice=ctx.author.voice)
-            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler)
+            messages = await getMusicQueue(server_id=ctx.guild.id, bot=self.bot, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
             if isinstance(_musiques, discord.Embed):
                 return await ctx.send(embed=embed)
             elif isinstance(_musiques, list):
-                messages = await getMusicQueue(server_id=ctx.guild.id, current=None, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler, bot=self.bot)
+                messages = await getMusicQueue(server_id=ctx.guild.id, music_list_handler=self.music_list_handler, bot=self.bot)
                 view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, music_controler=self.music_controler, bot=self.bot, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
 
                 if not self.music_controler.is_vc(server_id=ctx.guild.id):
@@ -2104,7 +2124,7 @@ class Music(commands.Cog):
                 embed = create_embed(title="Musique", description=f"`{', '.join(_musiques)}` est/sont les prochaines musique à jouer.", suggestions=["queue","mlist","playlist-play"])
                 await ctx.send(embed=embed, view=view)
                 if not vc.is_playing():
-                    await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                    await self.music_controler.play_music(server_id=ctx.guild.id)
                 return
             elif isinstance(_musiques, QuestionnaireMusicPlay):
                 return await ctx.send(_musiques)
@@ -2245,7 +2265,7 @@ class Music(commands.Cog):
                     discord.SelectOption(label=videos['video3'][0], description=desc4),
                     discord.SelectOption(label=videos['video4'][0], description=desc5)
                 ]
-                drop_down = DropDown(options=options, ctx=interaction, bot=self.bot, music_list_handler=self.music_list_handler)
+                drop_down = DropDown(options=options, ctx=interaction, bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, music_session=self.music_session)
                 view = DropDownView(ctx=interaction)
                 view.add_item(drop_down)
 
@@ -2262,7 +2282,7 @@ class Music(commands.Cog):
         """Passer la musique actuelle."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler)
+            messages = await getMusicQueue(server_id=ctx.guild.id, bot=self.bot, music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx,music_session = self.music_session, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
             if ctx.channel.name != "musique":
                 embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
@@ -2457,7 +2477,7 @@ class Music(commands.Cog):
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if playlistname not in playlist_names:
                 return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)                 
-            messages = await getMusicQueue(server_id=ctx.guild.id, current=None, bot=self.bot, unique_downloader=self.bot.unique_downloader, music_list_handler=self.music_list_handler)
+            messages = await getMusicQueue(server_id=ctx.guild.id, bot=self.bot,music_list_handler=self.music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=ctx.guild.id, ctx=ctx, bot=self.bot,music_session = self.music_session, music_controler=self.music_controler, music_list_handler=self.music_list_handler, unique_downloader=self.bot.unique_downloader)
             if ctx.author.voice is None:
                 return await ctx.send("Vous n'êtes pas dans un channel vocal, **BUICON**.", ephemeral=True)
@@ -2475,7 +2495,7 @@ class Music(commands.Cog):
             for music in musicList:
                 await self.music_controler.add_to_queue(ctx.guild.id, music)
             if not vc.is_playing(): 
-                await self.music_controler.play_music(server_id=ctx.guild.id, vc=vc)
+                await self.music_controler.play_music(server_id=ctx.guild.id)
             return await ctx.send(embed=embed,view=view)
         except Exception as e:
             LogErrorInWebhook()
