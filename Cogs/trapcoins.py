@@ -1,7 +1,7 @@
 from .utils.functions import LogErrorInWebhook, command_counter, convert_k_m_to_int, editGstats, create_embed, write_item, afficher_nombre_fr, load_json_data, lol_player_in_game, display_big_nums, init_user_to_item
 from discord.ext import commands
 from .utils.data import interests_indexs, interests_infos, daily_claim_interest
-from .utils.classes import TrapcoinsHandler
+from .utils.classes import TrapcoinsHandler, Streak
 from discord import app_commands
 import discord, locale, datetime, time
 from bot import Trapard
@@ -188,9 +188,6 @@ class Trapcoins(commands.Cog):
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             trapcoins_emoji = "<:trapcoins:1108725845339672597>"
-            if lol_player_in_game(self.bot.zigotos[ctx.author.id]) and int(ctx.author.id) in self.bot.lol_bet_dict and self.bot.lol_bet_dict[int(ctx.author.id)] is not None:
-                embed = create_embed(title="G-lol-bet", description=f"Il semble que vous êtes actuellement en game et que vous avez parié!\n\nVous ne pouvez pas transferer vos {str(trapcoins_emoji)} durant la partie. **BUICON**.")
-                return await ctx.send(embed=embed)
             nombre = convert_k_m_to_int(nombre)
             if nombre == "ValueError":
                 embed = create_embed(title="G-transfer", description="**Erreur**\n\nQuand vous utilisez le `nombre`, utilisez seulement les formats:\n`200k` (200 000)\n`2m` (2 000 000)\n`200 000`")
@@ -365,6 +362,7 @@ class Trapcoins(commands.Cog):
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             user_tier = load_json_data(item="interets", userid=str(ctx.author.id), opt_val="tier")
+            streak_handler = Streak(pool=self.bot.pool)
             bonus_gain = daily_claim_interest.get(user_tier)
             trapcoins_emoji = "<:trapcoins:1108725845339672597>"
             now = datetime.datetime.now()
@@ -372,13 +370,9 @@ class Trapcoins(commands.Cog):
                 embed = create_embed(title="Daily-claim", description=f"Vous avez déjà récupéré vos Trapcoins {str(trapcoins_emoji)} aujourd'hui !", suggestions=["g-roulette", "g-lol-bet", "g-balance"])
                 return await ctx.send(embed=embed)
             else:
-                try:
-                    user_streak_data = load_json_data(item="streak", userid=str(ctx.author.id))
-                    user_streak, _ = user_streak_data['streak'], user_streak_data['timestamp']
-                    user_streak += 1
-                except: #USR NOT FOUND ?
-                    user_streak = 1
-                    init_user_to_item(item="streak", userid=str(ctx.author.id), values={"streak": 1, "timestamp": int(time.time())})
+                user_streak, _ = await streak_handler.get(userid=ctx.author.id)
+                if user_streak == "Unknown user.":
+                    await streak_handler.register(userid=ctx.author.id)
                     bonus_gain = 0
                 if bonus_gain is None:
                     bonus_gain = 0

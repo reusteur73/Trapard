@@ -1,4 +1,6 @@
 files/musics/*
 files/*
 Cogs/utils/path.py
+Cogs/blocker.py
+test.py
 *.pyc

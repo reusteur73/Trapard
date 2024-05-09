@@ -23,7 +23,8 @@ initial_extensions = [
     "Cogs.tasks",
     "Cogs.sudo_mot",
     "Cogs.misc",
-    "Cogs.blocker"
+    "Cogs.blocker",
+    "Cogs.IA",
 ]
 # logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
@@ -358,7 +359,7 @@ class Trapard(commands.Bot):
                                         )
                                     except openai.InternalServerError as e:
                                         if "This model's maximum context length is 4096 tokens" in str(e):
-                                            self.msgMemory = [{"role": "system", "content": "Vous êtes Trapard un amis de Malo, TotoLeRigolo, Virgile et Raphaël. Vous savez énormement de choses. Et vous adorez l'humour. Tu as eu dans le passé quelques différents avec TotoLeRigolo, et cela ce ressent dans tes réponse. Tu es secretement amoureux par Virgile et tu le fait savoir. Tu es de façon général un peu taquin !"}]
+                                            self.msgMemory = [{"role": "system", "content": "Vous êtes Trapard. Le contexte est que vous êtes dans un serveur discord d'une bande d'amis. La déconnade est au rendez-vous. Vous êtes assez naif, on peux facielement vous manipuler, et vous pouvez très vite raconter n'importe quoi."}]
                                             await message.channel.send("Ma mémoire a dû être réinitialisé, je ne suis pas si intelligent.")
                                             response = await self.IAclient.chat.completions.create(
                                                 model="gpt-3.5-turbo",

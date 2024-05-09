@@ -83,18 +83,33 @@ class TrapardeurV2:
         return f"userId: {self.userId}, vocalTime: {self.vocalTime}, messageSent: {self.messageSent}, commandSent: {self.commandSent}"
 
 def LogErrorInWebhook(error=""):
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    f = "<@311013099719360512> Erreur à **" + current_time + "** :"
-    if traceback.format_exc() is not None and traceback.format_exc() != "NoneType: None":
-        f += "```" + traceback.format_exc() + "```"
+    chunk1, chunk2, chunk3 = None, None, None
+    error = traceback.format_exc()
+    if len(error) >= 2000:
+        chunk1 = error[:2000]
+        chunk2 = error[2000:]
+        if len(chunk2) >= 2000:
+            chunk2 = chunk2[:2000]
+            chunk3 = chunk2[2000:]
+    else:
+        chunk1 = error
+    embed = discord.Embed(
+        title=f'Erreur à {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+        description=f"```yaml\n{chunk1}```",
+    )
+    if chunk2:
+        embed.add_field(name="2:", value=f"```yaml\n{chunk2}```")
+    if chunk3:
+        embed.add_field(name="3:", value=f"```yaml\n{chunk3}```")
     if error != "":
-        f += "MSG Custom: ```" + error + "```"
-    asyncio.create_task(run_async_webhook_error(f))
+        embed.add_field(name="Custom Message", value=f"```yaml\n{error}```")
+    embed.add_field(name="", value='<@311013099719360512>')
+    asyncio.create_task(run_async_webhook_error(embed=embed))
 
-async def run_async_webhook_error(msg):
+async def run_async_webhook_error(embed: discord.Embed):
     async with ClientSession() as session:
         webhook = discord.Webhook.from_url(os.environ.get("ERROR_WEBHOOK"), session=session)
-        await webhook.send(content=msg, username='Foo')
+        await webhook.send(embed=embed, username='Trapard Errors Log', avatar_url="https://files.reus.nc/images/rock_sus.png")
 
 async def command_counter(user_id: str, bot, type:str=None):
     """
@@ -374,12 +389,6 @@ def write_item(item: str, userid: str=None, values: dict=None, array: list=None)
     except Exception as e:
         LogErrorInWebhook()
 
-def is_url(url: str) -> bool:
-    groups = re.match(r"http[s]?:\/\/(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*(),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+", url)
-    if groups:
-        return True
-    return False
-
 def init_user_to_item(item:str, userid: str=None, values: dict=None):
     caller_frame = inspect.currentframe().f_back
     caller_function_name = caller_frame.f_code.co_name
@@ -397,123 +406,15 @@ def init_user_to_item(item:str, userid: str=None, values: dict=None):
     except Exception as e:
         LogErrorInWebhook()
 
+def is_url(url):
+    pattern = re.compile(r"http[s]?:\/\/(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*(),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+")
+    return bool(re.search(pattern, url))
+
 def afficher_nombre_fr(nombre: int, decimal: int = 0):
     """Return french numbers display\n\nEx: `1000` → `1 000`"""
     format_string = "{{:,.{}f}}".format(decimal)
     nombre_formate = format_string.format(nombre).replace(",", " ").replace(".", ",")
     return nombre_formate
-
-def load_json_data(item: str=None, userid:str=None, opt_val: str=False, opt_val2: str=None, opt_val3: str=None, opt_val4: str=None):
-    """
-        Return all data as dict.
-
-        ``*item``: optional.
-                it can be: ["trapcoins", "sudoku-points", "devinette", "mots-meles",
-                
-                "sudoku-score", "streak", "interets", "lol-games","roulette-hist","quizz-ladder",
-                
-                "typeracer-scores", "song-stats", "trapeur"]
-        
-        ``**UserID``: ► Optional.
-    """
-    try:
-        file = JSON_DATA
-        with open(file, "r") as f:
-            data = json.loads(f.read())
-        
-        possible_items = ["trapcoins", "sudoku-points", 
-                        "devinette", "mots-meles", 
-                        "sudoku-score", "streak", 
-                        "interets", "lol-games",
-                        "roulette-history","quizz-ladder", 
-                        "typeracer-scores", "song-stats", "trapeur"]
-
-        if item:
-            if item in possible_items:
-                if userid:
-                    if data.get(item) and data[item].get(userid):
-                        if opt_val and data[item][userid].get(opt_val):
-                            return data[item][userid][opt_val]
-                        else:
-                            return data[item][userid]
-                    else:
-                        return "UserNotFound"
-                else:
-                    return data[item]
-            else:
-                return "Erreur item"
-        else:
-            return data
-    except Exception as e:
-        LogErrorInWebhook()
-
-def write_item(item: str, userid: str=None, values: dict=None, array: list=None):
-    """
-        Write new data to file.
-
-        ``*Item to write``
-                possible_items = ["trapcoins", "sudoku-points", 
-                      "devinette", "mots-meles", 
-                      "sudoku-score", "streak", 
-                      "interets", "lol-games",
-                      "roulette-hist","quizz-ladder", 
-                      "typeracer-scores", "song-stats", "trapeur"]
-
-        ``**UserID`` ► Optional
-
-        ``***Values, dict (take userid)``:
-
-                trapcoins: {"trapcoins": val1, "epargne": val2}
-
-                devinette: {"points": 12, "total_games": 4}
-
-                sudoku-points: {"points": 13, "easy": 4, "medium": 1, "hard": 1, "insane": 2, "temps": 99999}\n
-
-                streak: {"streak": 10, "timestamp": 1686466232}
-
-                mots-meles: {"points": 44, "temps": 74}
-
-                interets: {"tier": 10}
-
-                lol-games: {"last-game": "EUW1_6447484106"}
-
-                quizz-ladder: {"points": 105}
-
-                type-racer: {"score": 3}
-
-                trapeur: {"voice_time": 0,"message_sent": 0,"command_used": 0}
-
-        ``***Values, dict (do not userid)``:
-
-                roulette-history: [...25,1,13,3,9,29],
-
-                song-stats: {"time": 5718, "number-played": 1206324}
-
-
-    """    
-    try:
-        file_path = JSON_DATA
-        data = load_json_data()
-        possible_items = ["trapcoins",
-                        "devinette", "mots-meles", 
-                        "sudoku-points", "streak", 
-                        "interets", "lol-games",
-                        "roulette-history","quizz-ladder", 
-                        "typeracer-scores", "song-stats", "trapeur"]
-        if item in possible_items:
-            if userid:
-                data[item][userid] = values
-            else:
-                data[item] = values
-            if item == 'roulette-history':
-                data[item] = array
-            with open(file_path, "w") as f:
-                json.dump(data, f)
-            f.close()
-        else:
-            return "Erreur item"
-    except Exception as e:
-        LogErrorInWebhook()
 
 async def lol_player_in_game(player, bot):
     APIKEY = os.environ.get("RIOT_API")

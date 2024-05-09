@@ -164,38 +164,41 @@ class Admin(commands.Cog):
     @commands.command(name="sql")
     @commands.is_owner()
     async def text(self, ctx: commands.Context, query_type: Literal["fetchall", "fetchone", "exec", "execute"], *, query: str):
-        async with self.bot.pool.acquire() as conn:
-            if query_type in ["exec", "execute"]:
-                cmd = await conn.execute(query)
-                output = None
-            else:
-                fetch_func = getattr(conn, query_type)
-                cmd = await fetch_func(query)
-                output = cmd
-            if output is not None:
-                print(len(output))
-                embeds = []
-                embed = discord.Embed(title="SQL request")
-                field = "```"
-                for i, row in enumerate(output):
-                    if i % 10 == 0 and i != 0:
-                        field += "```"
-                        embed.add_field(name=f"Page 1", value=field, inline=False)
+        try:
+            async with self.bot.pool.acquire() as conn:
+                if query_type in ["exec", "execute"]:
+                    cmd = await conn.execute(query)
+                    output = None
+                else:
+                    fetch_func = getattr(conn, query_type)
+                    cmd = await fetch_func(query)
+                    output = cmd
+                if output is not None:
+                    print(len(output))
+                    embeds = []
+                    embed = discord.Embed(title="SQL request")
+                    field = "```"
+                    for i, row in enumerate(output):
+                        if i % 10 == 0 and i != 0:
+                            field += "```"
+                            embed.add_field(name=f"Page 1", value=field, inline=False)
+                            embeds.append(embed)
+                            embed = discord.Embed(title="SQL request")
+                            field = "```"
+                        line = " | ".join(map(str, row))
+                        field += line + "\n"
+                        if (i == len(output) -1) and (i < 10):
+                            field += "```"
+                            embed.add_field(name=f"Page 1", value=field, inline=False)
+                            embeds.append(embed)
+                    if embed.fields:
                         embeds.append(embed)
-                        embed = discord.Embed(title="SQL request")
-                        field = "```"
-                    line = " | ".join(map(str, row))
-                    field += line + "\n"
-                    if (i == len(output) -1) and (i < 10):
-                        field += "```"
-                        embed.add_field(name=f"Page 1", value=field, inline=False)
-                        embeds.append(embed)
-                if embed.fields:
-                    embeds.append(embed)
-                view = DataViewPage(ctx=ctx, embeds=embeds)
-                await ctx.send(f"query: {query}", view=view, embed=embeds[0])
-            else:
-                await ctx.send(f"query: {query} executed successfully")
+                    view = DataViewPage(ctx=ctx, embeds=embeds)
+                    await ctx.send(f"query: {query}", view=view, embed=embeds[0])
+                else:
+                    await ctx.send(f"query: {query} executed successfully")
+        except Exception as e:
+            LogErrorInWebhook()
 
 async def setup(bot: Trapard):
     await bot.add_cog(Admin(bot))

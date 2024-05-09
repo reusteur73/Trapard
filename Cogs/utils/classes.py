@@ -1,4 +1,4 @@
-import asqlite, discord, random
+import asqlite, discord, random, time
 # from bot import Trapard
 from .functions import LogErrorInWebhook, getUserById
 from typing import Literal
@@ -184,3 +184,51 @@ class TrapcoinsHandler:
             data = await conn.fetchall("SELECT userid, trapcoins, epargne FROM ( SELECT userid, trapcoins, 0 AS epargne FROM trapcoins UNION SELECT userid, 0 AS trapcoins, epargne FROM trapcoins ) AS combined ORDER BY trapcoins + epargne DESC LIMIT 25;")
         return data
 
+class Streak:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def get(self, userid: int):
+        """Return tuple: `streak`, `timestamp`"""
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT streak, timestamp FROM d_claim_streak WHERE userid = ?", (userid,))
+        if data:
+            return data[0], data[1]
+        else: return "Unknown user.", "Unknown user."
+    
+    async def edit(self, userid: int, reset: bool=False):
+        """Increment streak and update timestamp. if `reset` set user streak to `0`."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if not reset:
+                    await conn.execute("UPDATE d_claim_streak SET streak = streak + 1, timestamp = ? WHERE userid = ?", (int(time.time()), userid,))
+                else:
+                    await conn.execute("UPDATE d_claim_streak SET streak = 0 WHERE userid = ?", (userid,))
+        return True
+
+    async def register(self, userid:int):
+        """Register user in DB."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO d_claim_streak (streak, timestamp, userid) VALUES (1,?,?)", (int(time.time()), userid,))
+        return True
+    
+class GamesDbControler:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def get_points(self, userid:int, game: Literal["sudoku_ladder", "mots_mels_ladder", "devinette_ladder", "type_racer_ladder", "quizz_ladder"]):
+        """Get user points for a given game."""
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone(f"SELECT points FROM {game} WHERE userid = ?", (userid,))
+        if data:
+            return int(data[0])
+        return 0
+    
+    async def add_points(self, userid:int, points: int, game: Literal["sudoku_ladder", "mots_mels_ladder", "devinette_ladder", "type_racer_ladder", "quizz_ladder"]):
+        """"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                conn.execute(f"UPDATE {game} SET points = points + ? WHERE userid = ?", (points, userid,))
+        return True
+    

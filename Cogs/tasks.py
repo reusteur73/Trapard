@@ -2,7 +2,7 @@ from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_durat
 from .utils.data import interests_indexs, interests_infos
 from asyncio import sleep
 from bs4 import BeautifulSoup
-import discord, time, datetime, os
+import discord, time, datetime, os, re
 from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
@@ -30,6 +30,21 @@ def calculate_level(xp_total):
     xp_needed_per_level = 500
     return xp_total // xp_needed_per_level
 
+class RencontreNc:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def save(self, id:int, text:str, title: str, category: str):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO rencontresNC (annonce_id, titre, texte, category) VALUES (?,?,?,?)", (id,title, text, category,))
+
+
+    async def is_in(self, id:int):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT annonce_id FROM rencontresNC WHERE annonce_id = ?", (id,))
+        return bool(data)
+
 class Tasks(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
         self.bot = bot
@@ -44,6 +59,7 @@ class Tasks(commands.Cog):
         self.cryptoRapport.start()
         self.cpas_bien.start()
         self.check_users_xp.start()
+        self.rencontres_nc.start()
 
     @tasks.loop(minutes=1)
     async def update_status(self):
@@ -304,5 +320,42 @@ class Tasks(commands.Cog):
                 except Exception as e:
                     print(f"Erreur lors de la vérification des XP des utilisateurs : {e} USER={i[1]}, XP={xp}")
 
+    @tasks.loop(minutes=30)
+    async def rencontres_nc(self):
+        POSTS_URLS = ["homme-femme-5", "femme-homme-5", "transexuels-5", "homme-homme-5","plan-q-5", "travesti-5"]
+        POST_ENDP = "https://api.annonces.nc/posts"
+        handler = RencontreNc(pool=self.bot.pool)
+        nums_found = []
+        channel = await self.bot.fetch_channel(1211607454400651264)
+        sent = 0
+        pattern = re.compile(r'\b(\d{2})[ ,.]?(\d{2})[ ,.]?(\d{2})\b')
+        if channel:
+            for post_url in POSTS_URLS:
+                async with self.bot.session.get(f'https://api.annonces.nc/posts?by_category={post_url}&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1') as resp:
+                    data = await resp.json()
+                if data:
+                    for post in data:
+                        async with self.bot.session.get(f'{POST_ENDP}/{post["slug"]}') as post_resp:
+                            post_data = await post_resp.json()
+                        if post_data:
+                            texte = post_data["description"]
+                            titre = post_data["title"]
+                            idx = post_data["id"]
+                            cat = post_data['category']['name']
+                            is_in = await handler.is_in(idx)
+                            if not is_in:
+                                if len(texte) < 4096:
+                                    matches = pattern.findall(texte)
+                                    if matches:
+                                        for m in matches:
+                                            if len(m) == 3:
+                                                nums_found.append(f"{m[0]}{m[1]}{m[2]}")
+                                    embed = create_embed(title=titre, description=f"- {cat}\n- {texte}")
+                                    await channel.send(embed=embed)
+                                    sent += 1
+                                await handler.save(idx, texte, titre, cat)
+            if len(nums_found) > 0:
+                embed = create_embed(title="Numéro trouvé", description=f"Dans les {sent} dernières annonces, j'ai trouvé {len(nums_found)} numéros.\nVoici la liste\n" + "\n- ".join(set(nums_found)))
+                await channel.send(embed=embed)
 async def setup(bot: Trapard):
     await bot.add_cog(Tasks(bot))

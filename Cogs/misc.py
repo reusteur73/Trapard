@@ -1,7 +1,7 @@
 import os, discord, random, asyncio, datetime, torch, inspect, urllib3, traceback, json
 from discord.ui import UserSelect
 from discord import app_commands
-from .utils.functions import LogErrorInWebhook, format_duration, create_embed, command_counter, printFormat, convert_str_to_emojis, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data
+from .utils.functions import LogErrorInWebhook, format_duration, create_embed, command_counter, printFormat, convert_str_to_emojis, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data, is_url
 from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur, TrapcoinsHandler
 from .utils.context import Context
@@ -23,8 +23,10 @@ from bot import Trapard, DB_PATH
 from aiohttp import ClientSession
 from asqlite import Pool
 from datetime import datetime
+from bs4 import BeautifulSoup
 from TTS.api import TTS
-import pytz
+import pytz, re
+
 
 def get_local_time(country_code):
     try:
@@ -289,6 +291,29 @@ async def some_more_stats(session: ClientSession):
     total_lines = count_lines_in_directory(folder)
     text += f"Le nombre total de lignes dans le projet est : {total_lines}"
     return text
+
+async def aram_rank(session: ClientSession, player: str, region:str):
+    GAME_HISTORY = 11
+    async with session.get(f'https://ranked-aram.com/fr/player/{player}/{region}') as resp:
+        rawData = await resp.read()
+    rank = str(rawData).split(fr"""<div>{player}#{region}</div>        \r\n        </h1>\r\n        <p>""")[1].split("&nbsp;&nbsp;&nbsp;&nbsp;")[0].strip()
+    win_lose = str(rawData).split("&nbsp;&nbsp;&nbsp;&nbsp;")[1].split("&nbsp;&nbsp;&nbsp;")[0].strip()
+    tempData = str(rawData).split('<div class="jumbotron">')[2]
+    temp = str(tempData).split("<p>")
+    i = 0
+    fields = []
+    for r in temp:
+        if i != 0 and i < GAME_HISTORY:
+            champion = str(r).split("/ddragonData/img/champion/")[1].split(".png")[0].strip()
+            gameStatus = str(r).split(">")[2].split("!")[0].strip()
+            if gameStatus == r"D\xc3\xa9faite":
+                gameStatus = "Défaite"
+            kda = str(r).split("Score :")[1].split("- valeur")[0].strip()
+            lpValue = str(r).split(">")[5].split("<")[0].strip()
+            fields.append({"name": f"{champion}", "value": f"{gameStatus}: {lpValue}\n- KDA: {kda}", "inline": True})
+        i += 1
+    return create_embed(title=player, description=f"{rank} | {win_lose}", fields=fields)
+
 
 class Rule34View(discord.ui.View):
     def __init__(self, img_url: str, bot: Trapard):
@@ -1383,19 +1408,17 @@ class Misc(commands.Cog):
         """Trouve le bon code couleur !"""
         return await play_hexcodle(ctx=ctx, bot=self.bot)
     
-    @commands.command(name="sainte-parole", description="Affiche une sainte parole.")
-    async def sainteparole(self, ctx: discord.Interaction, precheur: discord.Member, parole: str):
+    @commands.hybrid_command(name="sainte-parole", description="Affiche une sainte parole.")
+    async def sainteparole(self, ctx: commands.Context, precheur: discord.Member, *,parole: str):
         try:
-            await command_counter(user_id=str(ctx.user.id), bot=self.bot)
-            try: await ctx.response.defer()
-            except: pass
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if precheur is None:
-                return await ctx.followup.send("Merci de mentionner un membre.", ephemeral=True)
+                return await ctx.send("Merci de mentionner un membre.", ephemeral=True)
             if parole is None:
-                return await ctx.followup.send("Merci de donner une parole.", ephemeral=True)
-            dateetheure = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                return await ctx.send("Merci de donner une parole.", ephemeral=True)
+            dateetheure = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             embed = create_embed(title="Sainte-parole", description=f"- **{precheur.display_name}** a dit:\n\n- {parole} 💬\n\n- Le {dateetheure}")
-            return await ctx.followup.send(embed=embed)
+            return await ctx.send(embed=embed)
         except Exception as e:
             LogErrorInWebhook()
 
@@ -1753,6 +1776,126 @@ class Misc(commands.Cog):
                 return await ctx.send(f"<@{userID}>", view=CringédexView(ctx=ctx, user=user, cringeList=cringeList), embed=embed)
         except Exception as e:
             LogErrorInWebhook()
+
+    @commands.hybrid_command(name="shortener", aliases=["short"])
+    async def shortner(self, ctx: commands.Context, link: str):
+        """Raccourcir la taille d'une URL."""
+        try:
+            await command_counter(user_id=ctx.author.id, bot=self.bot)
+            if is_url(link):
+                params = {}
+                if '?' in link:
+                    parts = link.split("?")
+                    link = parts[0]
+                    url = parts[1]
+                    url_params = url.split('&')
+                    for s in url_params:
+                        val = s.split("=")
+                        params[val[0]] = val[1]
+                print(link,'\n',params)
+                params['link'] = link
+                async with self.bot.session.get("https://api.reus.nc/shortener/", params=params) as resp:
+                    data = await resp.json()
+                if data['status'] == "Success":
+                    embed = create_embed(title="Url Shortener", description=f"Le lien raccourci: {data['short_link']}.")
+                else:
+                    print(data['status'])
+                    embed = create_embed(title="URL Shortener", description=f"Erreur lors du raccourcissement du lien `{link}`, merci de vérifier qu'il s'agit d'une URL valide.")
+            else:
+                embed = create_embed(title="URL Shortener", description=f"Erreur lors du raccourcissement du lien `{link}`, merci de vérifier qu'il s'agit d'une URL valide.")
+            return await ctx.send(embed=embed)
+        except:
+            LogErrorInWebhook()
+
+    @commands.hybrid_command(name="aram")
+    async def aram_cmd(self, ctx: commands.Context, player: str=None, region:str="EUW"):
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            defualt = {
+                311013099719360512: 'Huge Genetic Gap',
+                548195565653983232: 'FeskooDesLacs',
+                500247249154998273: "Son of Jaxter",
+                267439803786723329: "TotoTheFunnyGuy",
+                522619315879673857: "Dark Nanor"
+            }
+            if player is None:
+                if ctx.author.id in defualt:
+                    query = defualt[ctx.author.id]
+                else:
+                    embed = create_embed("Aram ranked", "Vous n'avez pas de compte LoL par default, et vous n'avez pas spécifié de joueur.")
+                    return await ctx.send(embed=embed)
+            else:
+                query = player
+
+            embed = await aram_rank(session=self.bot.session, player=query, region=region)
+            return await ctx.send(embed=embed)
+        except:
+            LogErrorInWebhook()
+
+    @commands.command(name="euro")
+    async def euroMillions(self, ctx: commands.Context):
+        """Génère 5 grilles d'Euro Millions."""
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            def top5_numeros(data: dict, etoiles: dict, mode:str):
+                if mode not in ["min", "max"]:
+                    raise ValueError("Le mode doit être 'min' ou 'max'")
+                sorted_numeros = sorted(data.items(), key=lambda x: int(x[1]["Nombre de sorties"]))
+                sorted_etoiles = sorted(etoiles.items(), key=lambda x: int(x[1]["Nombre de sorties"]))
+                if mode == "min":
+                    top5 = sorted_numeros[:5]
+                    top2 = sorted_etoiles[:2]
+                else:
+                    top5 = sorted_numeros[-5:]
+                    top2 = sorted_etoiles[-2:]
+                result = ([numero for numero, _ in top5], [etoile for etoile, _ in top2])
+                return result
+            
+            url = 'https://www.fdj.fr/jeux-de-tirage/euromillions-my-million/statistiques'
+            async with self.bot.session.get(url) as response:
+                html_content = await response.text()
+            soup = BeautifulSoup(html_content, "html.parser")
+            table = soup.find_all("table", class_="palmares-table")
+            data = {}
+            etoiles = {}
+            for row in table[0].find_all("tr", class_="palmares-line"):
+                cells = row.find_all("td", class_="palmares-line_item")
+                if len(cells) == 4:
+                    numero = cells[0].text.strip()
+                    nb_sorties = cells[1].text.strip()
+                    pourcentage = cells[2].text.strip()
+                    derniere_sortie = cells[3].text.strip()
+                    data[numero] = {
+                        "Nombre de sorties": nb_sorties,
+                        "% de sorties": pourcentage,
+                        "Dernière sortie": derniere_sortie
+                    }
+            for row in table[1].find_all("tr", class_="palmares-line"):
+                cells = row.find_all("td", class_="palmares-line_item")
+                if len(cells) == 4:
+                    numero = cells[0].text.strip()
+                    nb_sorties = cells[1].text.strip()
+                    pourcentage = cells[2].text.strip()
+                    derniere_sortie = cells[3].text.strip()
+                    etoiles[numero] = {
+                        "Nombre de sorties": nb_sorties,
+                        "% de sorties": pourcentage,
+                        "Dernière sortie": derniere_sortie
+                    }
+            _min = top5_numeros(data, etoiles, "min")
+            _max = top5_numeros(data, etoiles, "max")
+            grids = []
+            for _ in range(3):
+                grids.append((num := [random.randint(1, 50) for _ in range(5)], [random.randint(1, 12) for _ in range(2)]))
+            fields = [{"name": "Grille 1 (les plus sortie)", "value": f"Numéros: {' '.join(_max[0])}\nÉtoiles: {' '.join(_max[1])}", "inline": False},
+                    {"name": "Grille 2 (les moins sortie)", "value": f"Numéros: {' '.join(_min[0])}\nÉtoiles: {' '.join(_min[1])}", "inline": False}]
+            for i, grid in enumerate(grids):
+                fields.append({"name": f"Grille {i+3} (aléatoire)", "value": f"Numéros: {' '.join(map(str, grid[0]))}\nÉtoiles: {' '.join(map(str, grid[1]))}", "inline": False})
+            embed = create_embed(title="Euro Millions", description="Voici des grilles pour l'Euro Millions:", fields=fields)
+            return await ctx.send(embed=embed)
+        except:
+            LogErrorInWebhook()
+
 
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     

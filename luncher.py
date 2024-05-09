@@ -1,5 +1,5 @@
 from bot import Trapard
-import asyncio, os
+import asyncio, os, colorama
 
 async def run_bot():
     async with Trapard() as bot:
