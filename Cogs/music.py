@@ -2962,6 +2962,51 @@ class Music(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
+    @commands.hybrid_command(name="remove-liked-song", aliases=["rm-liked", "dislike"])
+    @app_commands.describe(index= "Le numéro (index) de la musique à enlever de tes musiques likés.")
+    @app_commands.describe(musique_name="Le nom de la musique à enlever de tes musiques likés.")
+    async def remove_liked_song(self, ctx: commands.Context, index: int=None, musique_name:str=None):
+        """Supprimer une musique de tes titres likées."""
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            if index is not None:
+                max_index = await self.music_list_handler.get_next_index()
+                if index >= max_index :
+                    return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"Le N°`{index}` n'existe pas dans la MList."))
+                song_name = await self.music_list_handler.getName(str(index))
+            elif musique_name is not None:
+                song_name = musique_name
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    result = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(ctx.author.id),))
+                    if result:
+                        if song_name in [i[2] for i in result]:
+                            await conn.execute("DELETE FROM LikedSongs WHERE songName = ? AND userId = ?", (song_name, str(ctx.author.id),))
+                            return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` a bien été enlevée de tes musiques likées."))
+                        else:
+                            return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` n'est pas dans tes musiques likées."))
+            return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` n'est pas dans tes musiques likées."))
+        except Exception as e:
+            LogErrorInWebhook()
+    @remove_liked_song.autocomplete("musique_name")
+    async def autocomplete_musique_name(self, ctx: discord.Interaction, musique_name: str):
+        try:
+            liste = []
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    result = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(ctx.user.id),))
+                    if result:
+                        for i in result:
+                            if musique_name.lower() in i[2].lower():
+                                liste.append(app_commands.Choice(name=f"{i[2]}", value=str(i[2])))
+                            if len(liste) == 25:
+                                break
+                    else:
+                        return [app_commands.Choice(name="Aucune musique likée.", value="Aucune musique likée.")]
+            return liste
+        except Exception as e:
+            LogErrorInWebhook()
+
 # SoundBoard group
     @commands.hybrid_group(name="soundboard", aliases=["sb"], fallback='menu')            
     async def soundboard(self, ctx: commands.Context):
