@@ -432,6 +432,78 @@ class get_artist_from_title():
         else:
             return None
 
+class EndSessionBtn(discord.ui.View):
+    def __init__(self, bot: Trapard, music_list_handler, music_controler, timeout=None):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.music_list_handler = music_list_handler
+        self.music_controler = music_controler
+
+        # self.all_btn = discord.ui.Button(label="play all", custom_id="play_all")
+        # self.add_item(self.all_btn)
+        # self.all_btn.callback = lambda interaction=self.ctx, button=self.all_btn: self.on_button_click(interaction, button, index=self.index)
+
+    # async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button, index):
+    #     if button.custom_id == "play_all":
+    #         await command_counter(user_id=str(interaction.user.id), bot=self.bot)
+    #         if interaction.channel.name != "musique":
+    #             embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
+    #             return await interaction.channel.send(embed=embed)
+    #         return await NewPlayAll(ctx=interaction, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler)
+    #     elif button.custom_id == "play_liked":
+    #         pass
+        
+    @discord.ui.button(label="play all", custom_id="play_all", style=discord.ButtonStyle.green, emoji="🎲")
+    async def play_all(self, interaction: discord.Interaction, button: discord.Button):
+        try:
+            try: await interaction.response.defer()
+            except: pass
+            await command_counter(user_id=str(interaction.user.id), bot=self.bot)
+            if interaction.channel.name != "musique":
+                embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
+                return await interaction.channel.send(embed=embed)
+            return await NewPlayAll(ctx=interaction, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler)
+        except Exception as e:
+            print(e)
+            LogErrorInWebhook()
+
+    @discord.ui.button(label="play liked", custom_id="play_liked", style=discord.ButtonStyle.green, emoji="⭐")
+    async def play_liked(self, interaction: discord.Interaction, button: discord.Button):
+        try: await interaction.response.defer()
+        except: pass
+        await command_counter(user_id=str(interaction.user.id), bot=self.bot)
+        if interaction.channel.name != "musique":
+            embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+        user = interaction.user
+        if interaction.user.voice is None: # Si le user nest dans aucun voocal
+            embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
+            return await interaction.followup.send(embed=embed)
+        async with self.bot.pool.acquire() as conn:
+            data = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(user.id),))
+        if len(data) == 0:
+            embed = create_embed(title="Erreur", description=f"<@{user.id}> n'a pas de musiques likés.")
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            music_list = []
+            for d in data:
+                id, userId, songName = d
+                music_list.append(songName)
+        random.shuffle(music_list)
+        if not self.music_controler.is_vc(server_id=interaction.guild.id):
+            await self.music_controler.join_vc(server_id=interaction.guild.id, channel=interaction.user.voice.channel)
+        vc: discord.VoiceClient = self.music_controler.voice_clients[interaction.guild.id]
+        for i in music_list:
+            if i is not None:
+                await self.music_controler.add_to_queue(interaction.guild.id, i)
+            else:
+                continue
+        embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"])
+        await interaction.followup.send(embed=embed)
+        if not vc.is_playing():
+            await self.music_controler.play_music(server_id=interaction.guild.id)
+        return
+
 class MusicList_Handler():
     """
     Class pour controler la db musiques
@@ -1231,7 +1303,8 @@ class MusicController:
                     if guild:
                         zic_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text)
                         if zic_chann:
-                            return await zic_chann.send(embed=embed)
+                            view = EndSessionBtn(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self, timeout=None)
+                            return await zic_chann.send(embed=embed, view=view)
                     return
                 if (server_id in self.bot.music_queues):
                     if len(self.bot.music_queues[server_id]) == 0:
@@ -1492,7 +1565,8 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
                         embed = create_embed(title="Fin de session", description=txt)
                         try: del self.music_session[interaction.guild.id]
                         except: pass
-                        await interaction.followup.send(embed=embed)
+                        view = EndSessionBtn(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, timeout=None)
+                        await interaction.followup.send(embed=embed, view=view)
                         return
                     else:
                         await interaction.followup.send("Trapard est dans aucun vocal, tu es one head ou quoi ?", ephemeral=True)
@@ -1526,7 +1600,8 @@ class PlayAllView(discord.ui.View): #Les trois buttons du play-all
                 await self.music_controler.add_next_to_queue(self.serverid, self.bot.last_music[self.serverid])
                 vc.stop()
                 embed = create_embed(title="Musique", description=f"La musique `{mu}` a été passé par <@{interaction.user.id}>, afin de jouer la musique précédente `{self.bot.last_music[self.serverid]}`.", suggestions=["mlist","play", "search"])
-                return await interaction.followup.send(embed=embed)
+                view = EndSessionBtn(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, timeout=None)
+                return await interaction.followup.send(embed=embed,view=view)
             elif button.custom_id == "sb":
                 return await handle_sb(ctx=interaction, bot=self.bot, music_controler=self.music_controler, userId=interaction.user.id)
         async def on_timeout(self):
@@ -1555,10 +1630,20 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
             exclude = None
             shuffle = True
         try:
-            if ctx.author.voice is None: # Si le user nest dans aucun voocal
+            if isinstance(ctx, commands.Context):
+                voice = ctx.author.voice
+            elif isinstance(ctx, discord.Interaction):
+                voice = ctx.user.voice
+            if voice is None: # Si le user nest dans aucun voocal
                 embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
-                return await ctx.send(embed=embed, ephemeral=True)
-            user_vocal = ctx.author.voice.channel
+                if isinstance(ctx, commands.Context):
+                    return await ctx.send(embed=embed, ephemeral=True)
+                elif isinstance(ctx, discord.Interaction):
+                    return await ctx.channel.send(embed=embed)
+            if isinstance(ctx, commands.Context):
+                user_vocal = ctx.author.voice.channel
+            elif isinstance(ctx, discord.Interaction):
+                user_vocal = ctx.user.voice.channel
             server_id = ctx.guild.id
             musicList = await music_list_handler.getAllMusicPath()
             total_musics_len = await music_list_handler.Get_Total_Musics_Len()
@@ -1588,7 +1673,10 @@ async def NewPlayAll(ctx: commands.Context, bot: Trapard, music_controler: Music
                 embed = create_embed(title="Musique", description=f"{added_musics_len} musiques ont été ajouté à la queue dans l'ordre ! `{t} musiques` pour une durée de `{total_musics_len}`.", suggestions=["queue","mlist","playlist-play"])
             messages = await getMusicQueue(server_id, bot, music_list_handler)
             view = PlayAllView(queue_messages=messages, serverid=server_id, ctx=ctx, bot=bot, music_controler=music_controler, music_list_handler=music_list_handler, unique_downloader=music_controler.unique_downloader)
-            await ctx.send(embed=embed, view=view)
+            if isinstance(ctx, commands.Context):
+                await ctx.send(embed=embed, view=view)
+            elif isinstance(ctx, discord.Interaction):
+                await ctx.channel.send(embed=embed, view=view)
             if not vc.is_playing():
                 await music_controler.play_music(server_id=ctx.guild.id)
             return
@@ -2317,7 +2405,7 @@ class Music(commands.Cog):
         except:
             LogErrorInWebhook()
 
-    @commands.hybrid_command(name='download', aliases=['search']) #old: /search and /download
+    @commands.hybrid_command(name='download', aliases=['search', 'dl', 'sh']) #old: /search and /download
     @app_commands.describe(keysearch = "Url Youtube ou texte de recherche.")
     async def download(self, interaction: commands.Context, *, keysearch: str):
         """Télécharger une musique, par url Youtube, ou par texte de recherche."""
@@ -2443,7 +2531,8 @@ class Music(commands.Cog):
                     embed = create_embed(title="Fin de session", description=txt)
                     try: del self.music_session[interaction.guild.id]
                     except: pass
-                    await interaction.send(embed=embed)
+                    view = EndSessionBtn(bot=self.bot, music_list_handler=self.music_list_handler, music_controler=self.music_controler, timeout=None)
+                    await interaction.send(embed=embed, view=view)
                     return
                 else:
                     await interaction.send("Trapard est dans aucun vocal, tu es one head ou quoi ?", ephemeral=True)
@@ -2455,9 +2544,13 @@ class Music(commands.Cog):
             LogErrorInWebhook()
 
     @commands.hybrid_command(name='remove', aliases=['del','delete', "supprimer", "supp"]) #old: /remove
-    async def remove(self, ctx: commands.Context, index: int):
+    @app_commands.describe(index="Le numéro exemple: 657")
+    @app_commands.describe(musique_name="Supprimer la musique par son nom (sans espace).")
+    async def remove(self, ctx: commands.Context, index: int=None, musique_name:str=None):
         """Enlever une musique de la liste."""
         try:
+            if music_name is not None:
+                index = musique_name
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             playlist_indexs = await self.music_list_handler.get_all_index_in_playlists()
             if str(index) in playlist_indexs:
@@ -2479,6 +2572,21 @@ class Music(commands.Cog):
             return await ctx.send(embed=embed)
         except Exception as e:
             LogErrorInWebhook()
+
+    @remove.autocomplete("musique_name")
+    async def autocomplete_musique_nameX(self, ctx: discord.Interaction, musique_name: str):
+        try:
+            liste = []
+            d = await self.music_list_handler.get_all_music_name()
+            for key, val in d.items():
+                if musique_name.lower() in key.lower():
+                    liste.append(app_commands.Choice(name=f"{key} ({val})", value=str(val)))
+                if len(liste) == 25:
+                    break
+            return liste
+        except Exception as e:
+            LogErrorInWebhook()
+
 #End music controler
     
     @commands.hybrid_command(name='is-song', aliases=["find"]) #old: /is-song
@@ -2945,11 +3053,19 @@ class Music(commands.Cog):
             return choices
         except Exception as e:
             LogErrorInWebhook()
- # End SoundBoard group
+    # End SoundBoard group
 
 async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicController, userId: int=None):
     """Affiche les sons de la soundboard."""
     try:
+        if isinstance(ctx, discord.Interaction):
+            if ctx.user.voice is None:
+                embed = create_embed(title="Erreur", description="Bien tenté, mais tu n'es pas dans le vocal :).", suggestions=["queue","mlist","playlist-play"])
+                return await ctx.followup.send(embed=embed, ephemeral=True)
+        elif isinstance(ctx, commands.Context):
+            if ctx.author.voice is None:
+                embed = create_embed(title="Erreur", description="Bien tenté, mais tu n'es pas dans le vocal :).", suggestions=["queue","mlist","playlist-play"])
+                return await ctx.send(embed=embed, ephemeral=True)
         if userId:
             user_id = userId
         else:
