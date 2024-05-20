@@ -3058,7 +3058,7 @@ class Music(commands.Cog):
 async def handle_sb(ctx: commands.Context, bot: Trapard, music_controler: MusicController, userId: int=None):
     """Affiche les sons de la soundboard."""
     try:
-        if isinstance(ctx, discord.Interaction):
+        if isinstance(ctx, discord.Interaction): 
             if ctx.user.voice is None:
                 embed = create_embed(title="Erreur", description="Bien tenté, mais tu n'es pas dans le vocal :).", suggestions=["queue","mlist","playlist-play"])
                 return await ctx.followup.send(embed=embed, ephemeral=True)
