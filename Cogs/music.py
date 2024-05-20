@@ -3,7 +3,6 @@ from discord.ext import commands
 from youtube_search import YoutubeSearch
 from discord import app_commands
 from pytube import YouTube
-import discord
 from discord.ui import Modal, TextInput
 from time import perf_counter
 from asyncio import sleep
@@ -11,7 +10,7 @@ from bot import Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_txt_to_colored
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
 from .utils.context import Context as CustomContext
-import traceback, re, random, os, asyncio, threading, base64, io
+import traceback, re, random, os, asyncio, threading, base64, io, discord, math
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
 
@@ -2950,14 +2949,13 @@ class Music(commands.Cog):
                 embed = create_embed(title="Liked-songs", description=f"<@{userID}> n'a pas de musiques likés !")
                 return await ctx.send(embed=embed)
             else:
-                string = ""
-                for n,i in enumerate(data):
-                    likedSongs = i[0]
-                    if n == len(data)-1:
-                        string += f"{likedSongs}"
-                    else:
-                        string += f"{likedSongs}, "
-                embed = create_embed(title=f"Musiques likés de {user.display_name}", description=string)
+                batch_size = 15
+                fields = []
+                songs = [f'`{i[0]}`' for i in data]
+                batchs = [songs[i:i + batch_size] for i in range(0, len(songs), batch_size)]
+                for i, batch in enumerate(batchs):
+                    fields.append({"name": f"{i+1}.", "value": " - ".join(batch), "inline": False})
+                embed = create_embed(title=f"Musiques likés de {user.display_name}", fields=fields, description=f"Total de musiques likés: {len(songs)}")
                 return await ctx.send(embed=embed)
         except Exception as e:
             LogErrorInWebhook()
