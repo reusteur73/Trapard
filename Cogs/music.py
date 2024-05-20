@@ -1172,7 +1172,7 @@ class MusicController:
             else:
                 queue_len = "( Aucune musique en queue )"
             
-            await asyncio.to_thread(draw_music, track, dler, int(0), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), [], queue_len, int(server_id), self.avatar)
+            await asyncio.to_thread(draw_music, f'{track.replace("mp3","")} ({index[0]})', dler, int(0), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), [], queue_len, int(server_id), self.avatar)
             file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
             embed.set_image(url=f"attachment://Music.png")            
@@ -1248,7 +1248,11 @@ class MusicController:
                     else:
                         c = 'white'
                     field += f'{convert_txt_to_colored(text=next_music, color=c, background="dark")}'
-                    next_musics.append(next_music)
+                    index = await self.music_list_handler.get_index_by_music_name(next_music)
+                    if index[0] is not None:
+                        next_musics.append(f"{next_music} ({index[0]})")
+                    else:
+                        next_musics.append(f"{next_music}")
                     if i == 3: break
             else:
                 next_musics.append("Aucune musique à venir.")
@@ -1265,7 +1269,7 @@ class MusicController:
             # else:
             #     embed = create_embed(title=f"Musique actuelle 🎜 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n- `{pbar}`\n- {self.cool_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {self.pourcent_em}          {self.jam_emoji}{field}\n\n                _Ping: {latency}_")    
 
-            await asyncio.to_thread(draw_music, track, dler, int(pourcent), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), next_musics, queue_len, int(server_id), self.avatar)
+            await asyncio.to_thread(draw_music, f'{track.replace("mp3","")} ({index[0]})', dler, int(pourcent), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), next_musics, queue_len, int(server_id), self.avatar)
             file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
             embed.set_image(url=f"attachment://Music.png")
@@ -1288,7 +1292,7 @@ class MusicController:
                 pbar = create_progress_bar(int(track_duration), int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(track_duration) + " /" + convert_to_minutes_seconds(track_duration)
                 
-                await asyncio.to_thread(draw_music, track, dler, 100, convert_to_minutes_seconds(track_duration), convert_to_minutes_seconds(track_duration), [], "", int(server_id), self.avatar)
+                await asyncio.to_thread(draw_music, f'{track.replace("mp3","")} ({index[0]})', dler, 100, convert_to_minutes_seconds(track_duration), convert_to_minutes_seconds(track_duration), [], "", int(server_id), self.avatar)
                 file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
                 embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
                 embed.set_image(url=f"attachment://Music.png")
