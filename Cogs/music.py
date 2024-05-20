@@ -227,7 +227,8 @@ def draw_music(
         current_track_time: str,
         next_musics: list,
         queue_len: str,
-        serverid: int
+        serverid: int,
+        avatar: str = None,
     ):
     
     def draw_text(
@@ -251,7 +252,19 @@ def draw_music(
             font=font,
             fill=fill,
         )
-
+    def add_corners(im, rad):
+        circle = Image.new('L', (rad * 2, rad * 2), 0)
+        draw = ImageDraw.Draw(circle)
+        draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
+        alpha = Image.new('L', im.size, 255)
+        w, h = im.size
+        alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
+        alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
+        alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
+        alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
+        im.putalpha(alpha)
+        return im
+    
     FONT = "/home/debian/trapard/files/Retron2000.ttf"
     img = Image.open("/home/debian/trapard/files/music_img.png")
 
@@ -261,7 +274,13 @@ def draw_music(
 
     fontLarge = ImageFont.truetype(FONT, 64)
     fontSmall = ImageFont.truetype(FONT, 44)
-
+    if avatar is not None:
+        augm = len(downloader) * 20
+        _avatar = Image.open(avatar).convert("RGBA")
+        _avatar = add_corners(_avatar, 100)
+        _avatar = _avatar.resize((165, 165), Image.LANCZOS)
+        img.paste(_avatar, (1150 + augm, 166), _avatar)
+    else: print("avatar is None")
     draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
 
     draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
@@ -439,20 +458,6 @@ class EndSessionBtn(discord.ui.View):
         self.music_list_handler = music_list_handler
         self.music_controler = music_controler
 
-        # self.all_btn = discord.ui.Button(label="play all", custom_id="play_all")
-        # self.add_item(self.all_btn)
-        # self.all_btn.callback = lambda interaction=self.ctx, button=self.all_btn: self.on_button_click(interaction, button, index=self.index)
-
-    # async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button, index):
-    #     if button.custom_id == "play_all":
-    #         await command_counter(user_id=str(interaction.user.id), bot=self.bot)
-    #         if interaction.channel.name != "musique":
-    #             embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
-    #             return await interaction.channel.send(embed=embed)
-    #         return await NewPlayAll(ctx=interaction, bot=self.bot, music_controler=self.music_controler, music_list_handler=self.music_list_handler)
-    #     elif button.custom_id == "play_liked":
-    #         pass
-        
     @discord.ui.button(label="play all", custom_id="play_all", style=discord.ButtonStyle.green, emoji="🎲")
     async def play_all(self, interaction: discord.Interaction, button: discord.Button):
         try:
@@ -1043,6 +1048,7 @@ class MusicController:
             self.current_song = {}
             self.current_song_status = {}
             self.curent_timecode = 0
+            self.avatar = None
 
             self.hypno_emoji = "<a:hypnotise:1126218362649858078>"
             self.rave_emoji = "<a:rave:1124099238163394632>"
@@ -1083,6 +1089,19 @@ class MusicController:
                     track, dler, index, field, track_duration, zic_chann = response
                 else: return "Erreur..."
                 
+                try:
+                    user = await self.bot.fetch_user(int(index[1]))
+                    avatar = user.display_avatar
+                    print(avatar)
+                    async with self.bot.session.get(str(avatar)) as r:
+                        _avatar = await r.read()
+                        with open(f"/home/debian/trapard/files/{server_id}_avatar.png", "wb") as f:
+                            f.write(_avatar)
+                    self.avatar = f"/home/debian/trapard/files/{server_id}_avatar.png"
+                except Exception as e:
+                    print(e)
+                    pass
+
                 # Song start playing
                 while vc.is_playing():
                     track_duration = await self._check_soundboard_status(server_id=server_id, track=track, dler=dler, index=index, reducer=reducer, view=view, field=field, track_duration=track_duration)
@@ -1153,7 +1172,7 @@ class MusicController:
             else:
                 queue_len = "( Aucune musique en queue )"
             
-            await asyncio.to_thread(draw_music, track, dler, int(0), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), [], queue_len, int(server_id))
+            await asyncio.to_thread(draw_music, track, dler, int(0), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), [], queue_len, int(server_id), self.avatar)
             file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
             embed.set_image(url=f"attachment://Music.png")            
@@ -1246,7 +1265,7 @@ class MusicController:
             # else:
             #     embed = create_embed(title=f"Musique actuelle 🎜 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n- `{pbar}`\n- {self.cool_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {self.pourcent_em}          {self.jam_emoji}{field}\n\n                _Ping: {latency}_")    
 
-            await asyncio.to_thread(draw_music, track, dler, int(pourcent), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), next_musics, queue_len, int(server_id))
+            await asyncio.to_thread(draw_music, track, dler, int(pourcent), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), next_musics, queue_len, int(server_id), self.avatar)
             file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
             embed.set_image(url=f"attachment://Music.png")
@@ -1269,7 +1288,7 @@ class MusicController:
                 pbar = create_progress_bar(int(track_duration), int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(track_duration) + " /" + convert_to_minutes_seconds(track_duration)
                 
-                await asyncio.to_thread(draw_music, track, dler, 100, convert_to_minutes_seconds(track_duration), convert_to_minutes_seconds(track_duration), [], "", int(server_id))
+                await asyncio.to_thread(draw_music, track, dler, 100, convert_to_minutes_seconds(track_duration), convert_to_minutes_seconds(track_duration), [], "", int(server_id), self.avatar)
                 file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
                 embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
                 embed.set_image(url=f"attachment://Music.png")
