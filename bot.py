@@ -23,7 +23,7 @@ initial_extensions = [
     "Cogs.tasks",
     "Cogs.sudo_mot",
     "Cogs.misc",
-    "Cogs.blocker",
+    # "Cogs.blocker",
     "Cogs.IA",
 ]
 # logging.basicConfig(filename='app.log', level=logging.DEBUG)
@@ -88,6 +88,7 @@ class Trapard(commands.Bot):
         self.current_track = {}
         self.last_music = {}
         self.unique_downloader_display_names = {}
+        self.unique_downloader_avatars = {}
         
         self.trapcoin_handler = TrapcoinsHandler(pool=self.pool)
 

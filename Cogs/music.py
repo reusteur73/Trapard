@@ -219,78 +219,6 @@ def getMusicList(playlistname):
     except Exception as e:
         LogErrorInWebhook()
 
-# def draw_music(
-#         music_name: str,
-#         downloader: str,
-#         pbar_percent: int,
-#         track_duration: str,
-#         current_track_time: str,
-#         next_musics: list,
-#         queue_len: str,
-#         serverid: int
-#     ):
-    
-#     def draw_text(
-#         draw: ImageDraw.ImageDraw,
-#         text: str,
-#         coordinates: Tuple[int, int],
-#         box_size: Tuple[int, int],
-#         font: ImageFont.FreeTypeFont,
-#         fill: str,
-#     ) -> None:
-#         text_width, text_height = draw.textlength(text, font=font), 24
-
-#         coordinates = (
-#             int(coordinates[0] + (box_size[0] - text_width) // 2),
-#             int(coordinates[1] + (box_size[1] - text_height) // 2),
-#         )
-
-#         draw.text(
-#             coordinates,
-#             text,
-#             font=font,
-#             fill=fill,
-#         )
-
-#     FONT = "/home/debian/trapard/files/Retron2000.ttf"
-#     img = Image.open("/home/debian/trapard/files/music_img.png")
-
-#     # Defining draw
-#     draw = ImageDraw.Draw(img)
-#     font = ImageFont.truetype(FONT, 18)
-
-#     fontLarge = ImageFont.truetype(FONT, 64)
-#     fontSmall = ImageFont.truetype(FONT, 44)
-
-#     draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
-
-#     draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
-
-#     draw_text(draw, f"{track_duration} / {current_track_time}", (960, 550), (0, 0), fontLarge, "white")
-
-#     draw_text(draw, f"{queue_len}", (1300, 695), (0, 0), fontSmall, "white")
-
-#     for i, music in enumerate(next_musics):
-#         draw_text(draw, music, (960, 800 + 70 * i), (0, 0), fontSmall, "white")
-
-#     MAX = 1780
-#     MIN = 139
-
-#     if pbar_percent > 100:
-#         pbar_percent = 100
-
-#     width = (MAX - MIN) * pbar_percent / 100
-
-#     draw.rounded_rectangle([(MIN, 360), (MIN + width, 497)], fill="green", outline="green", radius=25)
-
-#     draw_text(draw, f"{pbar_percent}%", (960, 400), (0, 0), fontLarge, "black")
-
-#     fp = io.BytesIO()
-#     img.convert("RGBA").save(fp, "PNG")
-#     img.save(f"/home/debian/trapard/files/{serverid}_music_player.png")
-#     return
-
-
 def draw_music(
         music_name: str,
         downloader: str,
@@ -299,10 +227,7 @@ def draw_music(
         current_track_time: str,
         next_musics: list,
         queue_len: str,
-        serverid: int,
-        int_time: int,
-        int_time2: int,
-        is_finished: bool = False,
+        serverid: int
     ):
     
     def draw_text(
@@ -327,60 +252,43 @@ def draw_music(
             fill=fill,
         )
 
-    def paste_image(
-        image: Image.Image,
-        img: Image.Image,
-    ) -> None:
-        # Redimensionner l'image à la taille spécifiée
-        resized_image = image.resize((200,200), Image.LANCZOS)
-    
-        # Coller l'image redimensionnée aux coordonnées spécifiées
-        img.paste(resized_image , (1650,50))
-
-    images = []
     FONT = "/home/debian/trapard/files/Retron2000.ttf"
-    MAX = 1780
-    MIN = 139
+    img = Image.open("/home/debian/trapard/files/music_img.png")
+
+    # Defining draw
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(FONT, 18)
+
     fontLarge = ImageFont.truetype(FONT, 64)
     fontSmall = ImageFont.truetype(FONT, 44)
-    # Defining draw
-    if not is_finished:
-        for z in range(20):
-            int_time += 0.5
-            current_track_time = convert_to_minutes_seconds(int(int_time))
-            pbar_percent = round(int_time / int_time2 * 100, 2)
-            img = Image.open("/home/debian/trapard/files/music_img.png")
-            draw = ImageDraw.Draw(img)
-            draw_text(draw, f"{queue_len}", (1300, 695), (0, 0), fontSmall, "white")
-            draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
-            draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
-            draw_text(draw, f"{current_track_time} / {track_duration}", (960, 550), (0, 0), fontLarge, "white")
-            for i, music in enumerate(next_musics):
-                draw_text(draw, music, (960, 800 + 70 * i), (0, 0), fontSmall, "white")
-            if pbar_percent > 100:
-                pbar_percent = 100
-            width = (MAX - MIN) * pbar_percent / 100
-            draw.rounded_rectangle([(MIN, 360), (MIN + width, 497)], fill="green", outline="green", radius=25)
-            draw_text(draw, f"{pbar_percent}%", (960, 400), (0, 0), fontLarge, "black")
-            images.append(img.copy())
-    else:
-        img = Image.open("/home/debian/trapard/files/ended_music_img.png")
-        draw = ImageDraw.Draw(img)
-        draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
 
-        draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
+    draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
 
-        draw_text(draw, f"{current_track_time} / {current_track_time}", (960, 550), (0, 0), fontLarge, "white")
-        width = (MAX - MIN) * 100 / 100
-        draw.rounded_rectangle([(MIN, 360), (MIN + width, 497)], fill="green", outline="green", radius=25)
-        draw_text(draw, f"100%", (960, 400), (0, 0), fontLarge, "black")
+    draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
+
+    draw_text(draw, f"{track_duration} / {current_track_time}", (960, 550), (0, 0), fontLarge, "white")
+
+    draw_text(draw, f"{queue_len}", (1300, 695), (0, 0), fontSmall, "white")
+
+    for i, music in enumerate(next_musics):
+        draw_text(draw, music, (960, 800 + 70 * i), (0, 0), fontSmall, "white")
+
+    MAX = 1780
+    MIN = 139
+
+    if pbar_percent > 100:
+        pbar_percent = 100
+
+    width = (MAX - MIN) * pbar_percent / 100
+
+    draw.rounded_rectangle([(MIN, 360), (MIN + width, 497)], fill="green", outline="green", radius=25)
+
+    draw_text(draw, f"{pbar_percent}%", (960, 400), (0, 0), fontLarge, "black")
 
     fp = io.BytesIO()
     img.convert("RGBA").save(fp, "PNG")
-    if is_finished:
-        img.save(f"/home/debian/trapard/files/{serverid}_music_player.gif")
-    else:
-        images[0].save(f'/home/debian/trapard/files/{serverid}_music_player.gif', save_all=True, append_images=images[1:], optimize=False, duration=int(1000 / 2), loop=1)
+    img.save(f"/home/debian/trapard/files/{serverid}_music_player.png")
+    return
 
 def getVideoId(title):
     try:
@@ -1175,14 +1083,6 @@ class MusicController:
                     track, dler, index, field, track_duration, zic_chann = response
                 else: return "Erreur..."
                 
-                try:
-                    # get avatar url of dler by id:
-                    u = await self.bot.fetch_user(int(index[1]))
-                    avatar = u.display_avatar
-                    print(avatar)
-                except:
-                    pass
-
                 # Song start playing
                 while vc.is_playing():
                     track_duration = await self._check_soundboard_status(server_id=server_id, track=track, dler=dler, index=index, reducer=reducer, view=view, field=field, track_duration=track_duration)
@@ -1253,10 +1153,10 @@ class MusicController:
             else:
                 queue_len = "( Aucune musique en queue )"
             
-            await asyncio.to_thread(draw_music, track, dler, int(0), convert_to_minutes_seconds(track_duration), self.curent_timecode, [], queue_len, int(server_id),self.curent_timecode,track_duration,False)
-            file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.gif", filename=f"Music.gif")
+            await asyncio.to_thread(draw_music, track, dler, int(0), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), [], queue_len, int(server_id))
+            file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
-            embed.set_image(url=f"attachment://Music.gif")            
+            embed.set_image(url=f"attachment://Music.png")            
             self.current_song_pbar = await zic_chann.send(embed=embed, view=view, file=file)
             self.last_message = self.current_song_pbar
             next_musics = None
@@ -1306,7 +1206,7 @@ class MusicController:
                 self.curent_timecode = int(track_duration)
             pbar = create_progress_bar(self.curent_timecode, int(track_duration), bar_length=30)
             dur = convert_to_minutes_seconds(str(self.curent_timecode)) + " /" + convert_to_minutes_seconds(track_duration)
-            if time_old % 15 == 0:
+            if time_old % 4 == 0:
                 try:
                     activity = discord.CustomActivity(
                         name = "Custom Status", # leave this like this
@@ -1346,10 +1246,10 @@ class MusicController:
             # else:
             #     embed = create_embed(title=f"Musique actuelle 🎜 {self.rave_emoji}", description=f"**{track}** (`🇳 {convert_int_to_emojis(int(index[0]))}`)\n\nTéléchargé par **{dler}** {self.hypno_emoji}\n\n- `{pbar}`\n- {self.cool_emoji}              `{convert_str_to_emojis(dur)}`       {convert_str_to_emojis(str(pourcent))} {self.pourcent_em}          {self.jam_emoji}{field}\n\n                _Ping: {latency}_")    
 
-            await asyncio.to_thread(draw_music, track, dler, int(pourcent), convert_to_minutes_seconds(track_duration), self.curent_timecode, next_musics, queue_len, int(server_id),self.curent_timecode,track_duration,False)
-            file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.gif", filename=f"Music.gif")
+            await asyncio.to_thread(draw_music, track, dler, int(pourcent), str(convert_to_minutes_seconds(str(self.curent_timecode))), convert_to_minutes_seconds(track_duration), next_musics, queue_len, int(server_id))
+            file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
             embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
-            embed.set_image(url=f"attachment://Music.gif")
+            embed.set_image(url=f"attachment://Music.png")
             if self.current_song_pbar.id !=  self.last_message.id:
                 if time_old % 10 == 0:
                     await self.current_song_pbar.delete()
@@ -1359,7 +1259,7 @@ class MusicController:
                     await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
             else:
                 await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
-            await sleep(6)
+            await sleep(3)
             return time_old
 
         async def _end_playing_song(self,server_id,track_duration,track,index,dler,vc:discord.VoiceClient):
@@ -1369,10 +1269,10 @@ class MusicController:
                 pbar = create_progress_bar(int(track_duration), int(track_duration), bar_length=30)
                 dur = convert_to_minutes_seconds(track_duration) + " /" + convert_to_minutes_seconds(track_duration)
                 
-                await asyncio.to_thread(draw_music, track, dler, 100, track_duration, convert_to_minutes_seconds(track_duration), [], "", int(server_id),self.curent_timecode,track_duration,True)
-                file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.gif", filename=f"Music.gif")
+                await asyncio.to_thread(draw_music, track, dler, 100, convert_to_minutes_seconds(track_duration), convert_to_minutes_seconds(track_duration), [], "", int(server_id))
+                file = discord.File(f"/home/debian/trapard/files/{server_id}_music_player.png", filename=f"Music.png")
                 embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
-                embed.set_image(url=f"attachment://Music.gif")
+                embed.set_image(url=f"attachment://Music.png")
                 
                 await self.current_song_pbar.edit(embed=embed, view=None, attachments=[file])
                 self.bot.last_music[server_id] = track
