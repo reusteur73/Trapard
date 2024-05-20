@@ -2734,7 +2734,7 @@ class Music(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
-    @playlist.command(name="remove")
+    @playlist.command(name="remove") 
     @app_commands.describe(playlistname = "Le nom de la playlist à supprimer.")
     async def remove1(self, ctx: commands.Context, playlistname: str):
         """Supprimer une playlist."""
