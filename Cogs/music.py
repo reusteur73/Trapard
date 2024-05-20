@@ -1467,7 +1467,7 @@ class QuestionnaireMusicPlay(Modal, title='Jouer une/des musiques'):
         await interaction.send('Une erreur est survenue.', ephemeral=True)
         traceback.print_exception(type(error), error, error.__traceback__)
 
-class PlayAllView(discord.ui.View): #Les trois buttons du play-all
+class PlayAllView(discord.ui.View): #Les trois buttons du play-all 
     try:
         def __init__(self, queue_messages, serverid, ctx: commands.Context, bot: Trapard, music_controler: MusicController, music_list_handler: MusicList_Handler,unique_downloader, music_session=None,row:int=None): 
             super().__init__(timeout=300)
