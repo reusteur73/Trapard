@@ -6,6 +6,7 @@ from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur, TrapcoinsHandler
 from .utils.context import Context
 from .utils.path import TRAPARDEUR_IMG, LOL_FONT, FILES_PATH,R34_FOLDER, MAIN_DIR
+from .utils.predict import predict
 from discord.ext import commands
 from typing_extensions import Annotated
 from typing import Optional, NamedTuple, TypedDict, Tuple, Literal
@@ -1484,7 +1485,8 @@ class Misc(commands.Cog):
         if len(message) > 150:
             embed = create_embed(title="Mobitag", description=f"Erreur, Mobitag autorise l'envoi de messages de 150 caractères ou moins. Et non {len(message)}...")
             return await ctx.send(embed=embed)
-
+        embed1 = create_embed(title="Mobitag", description=f"Chargement de l'envoi du message au n°{destinataire} en cours...")
+        _message = await ctx.send(embed=embed1)
         driver = getDriver()
         display = Display(visible=0, size=(1024, 768))
         display.start()
@@ -1501,39 +1503,23 @@ class Misc(commands.Cog):
         img_data = b64decode(img_base64)
         img = Image.open(BytesIO(img_data))
         img.save(f"{FILES_PATH}mobitag_code.png")
-
+        solved_guess = predict(f"{FILES_PATH}mobitag_code.png") # predict using trained AI
         file = discord.File(f"{FILES_PATH}mobitag_code.png", filename=f"mobitag_code.png")
-        embed = create_embed(title="Mobitag", description="Écris le captcha...")
-        embed.set_image(url=f"attachment://mobitag_code.png")
-
-        captcha_msg = await ctx.send(file=file,embed=embed)
-
-        def check(message: discord.Message):
-            return ctx.author.id == message.author.id and message.channel == ctx.channel
-        
-        try:
-            message_code = await self.bot.wait_for("message", check=check, timeout=500)
-        except asyncio.TimeoutError:
-            driver.close()
-            display.stop()
-            return
-        await captcha_msg.delete()
-        code = message_code.content.upper()
-        await message_code.delete()
-        
+        embed1 = create_embed(title="Mobitag", description=f"Chargement de l'envoi du message au n°{destinataire} terminé.\n\n" + f"Prédiction du captcha: {solved_guess}")
+        embed1.set_image(url=f"attachment://mobitag_code.png")
+        await _message.edit(attachments=[file],embed=embed1)
         url = "http://www.mobitag.nc/mbe?"
-        params = f"babar={mbt_cook_value}&typsms=mbgE&lang=fr&cde=atem12&imgaleat={code}&desti_crc=6&desti={destinataire}&telexp_crc=0&telexp=&smsok=OK&message={message}&caracteres={150-len(message)}&mail_send=&msgerr=&time_reinit_max=08%3A00&time_reinit=+07%3A23"
-        
+        params = f"babar={mbt_cook_value}&typsms=mbgE&lang=fr&cde=atem12&imgaleat={solved_guess}&desti_crc=6&desti={destinataire}&telexp_crc=0&telexp=&smsok=OK&message={message}&caracteres={150-len(message)}&mail_send=&msgerr=&time_reinit_max=08%3A00&time_reinit=+07%3A23"
         driver.get(url+params)
 
         try:
             error = WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, '/html/body/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[6]/td/table/tbody/tr[2]/td/table/tbody/tr/td[2]/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[1]/td'))).text
             if 'Code image non valide' in error:
-                embed = create_embed(title="Mobitag", description="Captcha invalide.")
-                return await ctx.send(embed=embed)
+                embed1.add_field(name="Erreur", value="Le code image n'a pas été reconnu correctement.")
+                return await ctx.send(embed=embed1)
         except:
-            embed = create_embed(title="Mobitag", description="Message envoyé avec succès!")
-            return await ctx.send(embed=embed)
+            embed1.add_field(name=" ", value=f"Le message `{message}` a été envoyé au `{destinataire}`.")
+            return await _message.edit(embed=embed1)
         finally:
             display.stop()
             driver.close()
