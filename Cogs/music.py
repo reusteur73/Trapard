@@ -10,7 +10,7 @@ from bot import Trapard
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_txt_to_colored
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
 from .utils.context import Context as CustomContext
-import traceback, re, random, os, asyncio, threading, base64, io, discord, math
+import traceback, re, random, os, asyncio, threading, base64, io, discord
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
 
