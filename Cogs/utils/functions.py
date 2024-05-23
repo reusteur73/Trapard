@@ -1,9 +1,7 @@
 import discord, datetime, traceback, asyncio
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from .data import commands_id_dict, daily_claim_interest
 from .path import JSON_DATA, G_STATS, R34_FOLDER
-from discord_webhook import DiscordWebhook
-from selenium.webdriver.common.by import By
 from PIL import Image
 import undetected_chromedriver as uc
 import json, re, inspect, os, random, asqlite, io
@@ -914,3 +912,204 @@ async def get_rule34_data(session: ClientSession):
     im = Image.open(io.BytesIO(data))
     im.save(f"{R34_FOLDER}rule34.{found_ext}")
     return img_title, True, found_ext, img_source
+
+async def getMList(bot, userid:int=None):
+    """return int(song) duration by index"""
+
+    async with bot.pool.acquire() as conn:
+        out = await conn.fetchall("SELECT name, duree, downloader, artiste, pos FROM musiques")
+
+    data = {}
+    for musique in out:
+        name, duree, downloader, artiste, pos = musique
+        data[str(pos)] = [name, duree, downloader, artiste]
+    output = []
+    page_limit = 25  # Nombre d'éléments par page
+    total_pages = (len(data) + page_limit - 1) // page_limit  # Calcul du nombre total de pages
+    
+    uniques_id = [1065781211219370104]
+
+    if userid:
+        data2 =  []
+        taille = 0
+
+    for i, (key, val) in enumerate(data.items()):
+        if userid:
+            if val[2] == userid:
+                val.append(key)
+                data2.append(val)
+                if int(val[2]) > 1000000000:
+                    uniques_id.append(val[2])
+                taille+=1
+        else:
+            if int(val[2]) > 1000000000:
+                uniques_id.append(val[2])
+    uniques_id = set(uniques_id)
+
+    dicto = {}
+    for unique_id in uniques_id:
+        _ = await bot.fetch_user(int(unique_id))
+        dicto[unique_id] = _.display_name
+    if userid is None:
+        for page in range(total_pages):
+            embed = discord.Embed(title=f"Liste des musiques")
+            embed.add_field(name="", value=f"- téléchargées par Tous ({await Get_Total_Musics_Len(bot.pool)}) - Page {page+1}/{total_pages}", inline=False)
+            field = "```" + printFormat("N°", 4) + "|" + printFormat("Nom", 30) + "|" + printFormat("Artiste", 14) + "|" + printFormat("Durée", 6) + "|" + printFormat("Téléchargé par", 12) +"\n\n"
+            field += '-' * 4 +  "|" + '-' * 33 + '|' + '-' * 6 + '|' + '-' * 11 + "\n"
+
+            start_index = page * page_limit
+            end_index = min(start_index + page_limit, len(data))
+            for i in range(start_index, end_index):
+                music_info = data[str(i + 1)]
+                if len(music_info) == 4:
+                    artist = music_info[3]
+                else:
+                    artist = "Inconnu"
+                if artist in music_info[0]:
+                    music_info[0] = music_info[0].replace(artist, "")
+                time2 = convert_to_minutes_seconds(str(music_info[1]))
+                if str(time2).strip() == "0m 0":
+                    time2 = "N/A"
+                try:
+                    username = bot.unique_downloader_display_names[int(music_info[2])]
+                except:
+                    username = "Unknown"
+                if username == "FeskooDesLacs":
+                    username = "Feskoo"
+                line = f"{printFormat(str(i + 1), 4)}|{printFormat(music_info[0], 30)}|{printFormat(str(artist), 14)}|{printFormat(time2, 5)}|{printFormat(str(username), 12)}\n"
+
+                if len(field) + len(line) > 1000:
+                    field += "```"
+                    embed.add_field(name="", value=field, inline=False)
+                    field = "```"
+                field += line
+            if field.strip() != "```":
+                field += "```"
+                embed.add_field(name="", value=field, inline=False)
+
+            output.append(embed)
+    else:
+        page_limit = 20
+        if taille == 0:
+            em = "<:skullcry:1124350948958031956>"
+            return create_embed(title="Liste des musiques", description=f"- L'utilisateur <@!{userid}> ne semble avoir téléchargé aucune musique {em}")
+        total_pages = (len(data2) + page_limit - 1) // page_limit
+        for page in range(total_pages):
+            embed = discord.Embed(title=f"Liste des musiques")
+            embed.add_field(name="", value=f"- téléchargées par <@!{userid}> ({taille} musiques) - Page {page+1}/{total_pages}", inline=False)
+            field = "```" + printFormat("N°", 4) + "|" + printFormat("Nom", 30) + "|" + printFormat("Artiste", 14) + "|" + printFormat("Durée", 6) + "|" + printFormat("Téléchargé par", 12) +"\n\n"
+            field += '-' * 4 +  "|" + '-' * 33 + '|' + '-' * 6 + '|' + '-' * 11 + "\n"
+
+            start_index = page * page_limit
+            end_index = min(start_index + page_limit, len(data2))
+            for i in range(start_index, end_index):
+                music_info = data2[i]
+                if len(music_info) == 4:
+                    artist = rename(music_info[3])
+                else:
+                    artist = "Inconnu"
+                if artist in music_info[0]:
+                    music_info[0] = music_info[0].replace(artist, "")
+                time2 = convert_to_minutes_seconds(str(music_info[1]))
+                if str(time2).strip() == "0m 0":
+                    time2 = "N/A"
+                username = bot.unique_downloader_display_names[int(music_info[2])]
+                if username == "FeskooDesLacs":
+                    username = "Feskoo"
+                line = f"{printFormat(str(music_info[-1]), 4)}|{printFormat(music_info[0], 30)}|{printFormat(str(artist), 14)}|{printFormat(time2, 5)}|{printFormat(str(username), 12)}\n"
+                if len(field) + len(line) > 1000:
+                    field += "```"
+                    embed.add_field(name="", value=field, inline=False)
+                    field = "```"
+                field += line
+            if field.strip() != "```":
+                field += "```"
+                embed.add_field(name="", value=field, inline=False)
+
+            output.append(embed)
+    return output
+
+async def Get_Total_Musics_Len(pool):
+    """
+    return string of total time of the music list
+    """
+    async with pool.acquire() as conn:
+        data = await conn.fetchall("SELECT duree FROM musiques")
+    total_seconds = 0
+    for item in data:
+        total_seconds += int(item[0])
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    duration_str = f"{hours}h {minutes:02d}m {seconds:02d}s"
+    return duration_str
+
+def convert_to_minutes_seconds(music_len_sec: str, just_int:bool=False):
+    try:
+        if not str(music_len_sec).isdigit():
+            return ""
+        music_len_sec = int(music_len_sec)
+        minutes = music_len_sec // 60
+        seconds = music_len_sec % 60
+        if just_int:
+            return f'{minutes} {seconds}'
+        else:
+            return f'{minutes}m{seconds}s'
+    except Exception as e:
+        LogErrorInWebhook()
+
+def rename(filename: str):
+    """Rename music name. Use this before saving name in music list"""
+    try:
+        filename = re.sub(r'\.mp3$', '', filename)
+        ob = list(filename)
+        out = []
+        if len(ob) > 30:
+            index = 0
+            for o in ob:
+                if index == 30:
+                    break
+                out.append(o)
+                index += 1
+
+            out2 = ""
+            for u in out:
+                out2 += str(u)
+
+            out2 += ".mp3"
+            clean_text = re.sub(r'\.mp3$', '', out2)
+            clean_text = re.sub("[\"\(\)\[\]\|\-\/., ]", "", out2).strip()
+            clean_text += ".mp3"
+
+        else:
+            clean_text = re.sub(r'\.mp3$', '', filename)
+            clean_text = re.sub("[\"\(\)\[\]\|\-\/., ]", "", clean_text).strip()
+            clean_text += '.mp3'
+
+        return clean_text
+    except Exception as e:
+        LogErrorInWebhook()
+
+async def save_song_stats(time: int, number: int, pool):
+    """Save songs stats after played/skipped"""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE songs_stats SET time = time + ?, number = number + ? WHERE id = 1", (time, number,))
+    return
+
+async def get_song_stats(pool):
+    """Return `tuple` time, number"""
+    async with pool.acquire() as conn:
+        data = await conn.fetchone("SELECT time, number FROM songs_stats WHERE id = 1")
+    if data:
+        return int(data[0]), int(data[1])
+    return "Error"
+
+async def get_latest_message_from_channel(channel: discord.TextChannel) -> discord.Message:
+    """
+    Return last message from a given discord channel.
+    """
+    async for message in channel.history(limit=1, oldest_first=False):
+        return message
+    return None
+
