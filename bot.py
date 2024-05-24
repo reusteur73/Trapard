@@ -12,6 +12,7 @@ from Cogs.utils.data import FULL_EMOJIS_LIST
 from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats
 from Cogs.utils.path import DB_PATH
 from asyncio import sleep
+from wavelink import Player
 import asyncio, openai, os, wavelink
 
 initial_extensions = [
@@ -38,7 +39,7 @@ DEBUG = True
 class ServerUI:
     def __init__(self, bot, player, downloader_id, track_name, track_index, track_duration, txt_channel_id):
         self.bot = bot
-        self.player = player
+        self.player: Player = player
         self.downloader_id = downloader_id
         self.downloader_name = None
         self.avatar = None
@@ -52,7 +53,7 @@ class ServerUI:
         self.guild_id = None
 
     async def start(self):
-        _running = True
+        self._running = True
         self.current_song_pbar = None
         start_time = perf_counter()
         txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
@@ -72,6 +73,7 @@ class ServerUI:
         print(f"[F] MusicUITask started for {self.track_name}")
 
         while self.player.playing and self._running:
+            loop_time = perf_counter()
             current_time = perf_counter() - start_time
             view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
             next_musics = ["Aucune musique en attente" if len(self.player.queue) == 0 else f"{music.extras._name} ({music.extras._index})" for music in self.player.queue[:4]]
@@ -97,11 +99,14 @@ class ServerUI:
             if not self.player.playing:
                 break
             await asyncio.sleep(3)
+            if self.guild_id in self.bot.server_music_session:
+                self.bot.server_music_session[self.guild_id]['time'] +=  int(perf_counter() - loop_time)
+                print(f"Added {int(perf_counter() - loop_time)} to {self.guild_id} session time.")
+        
+        
         current_time = perf_counter() - start_time
-
-
         await save_song_stats(time=int(current_time), number=1, pool=self.bot.pool)
-        await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, 100, str(convert_to_minutes_seconds(str(self.track_duration))), convert_to_minutes_seconds(self.track_duration), next_musics, f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
+        await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, 100, str(convert_to_minutes_seconds(str(self.track_duration))), convert_to_minutes_seconds(self.track_duration), [], f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
         file = discord.File(f"/home/debian/trapard/files/{self.guild_id}_music_player.png", filename=f"Music.png")
         embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
         embed.set_image(url=f"attachment://Music.png")
@@ -111,6 +116,10 @@ class ServerUI:
 
     async def stop(self):
         self._running = False
+        print("[F] MusicUITask stopped for", self.track_name)
+        
+        if self.guild_id in self.bot.server_music_session:
+            self.bot.server_music_session[self.guild_id]['nb'] +=  1
         if self.current_song_pbar:
             await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, 100, str(convert_to_minutes_seconds(str(self.track_duration))), convert_to_minutes_seconds(self.track_duration), [], f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
             file = discord.File(f"/home/debian/trapard/files/{self.guild_id}_music_player.png", filename=f"Music.png")
@@ -147,6 +156,7 @@ class Trapard(commands.Bot):
 
     def __init__(self):
         allowed_mentions = discord.AllowedMentions(roles=False, everyone=False, users=True)
+        discord.utils.setup_logging(level=logging.INFO)
         intents = discord.Intents(
             guilds=True,
             members=True,
@@ -268,7 +278,7 @@ class Trapard(commands.Bot):
             return
         original: wavelink.Playable | None = payload.original
         track: wavelink.Playable = payload.track
-        print(f"[+] track {track.extras._name} - {player.queue.get().extras._name}\n")
+        print(f"[+] track {track.extras._name}\n")
         guild_id = player.guild.id
         if guild_id not in self.locks:
             self.locks[guild_id] = asyncio.Lock()
@@ -306,6 +316,7 @@ class Trapard(commands.Bot):
                 if guild_id in self.server_music_session:
                     played_time = convert_to_minutes_seconds(str(self.server_music_session[guild_id]['time']))
                     embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.server_music_session[guild_id]['nb']} musiques, pour une durée de **{played_time}**!")
+                    self.server_music_session[player.guild.id] = {'nb': 0, 'time': 0}
                     zic_chann = discord.utils.get(player.guild.channels, name="musique", type=discord.ChannelType.text)
                     if zic_chann is not None:
                         view = EndSessionBtn(bot=self)

@@ -941,6 +941,8 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                 track = self.player.current
                 await self.player.skip(force=True)
                 if track is not None:
+                    if self.player.guild.id in self.bot.server_music_session:
+                        self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
                     mu = track.extras._name
                     embed = create_embed(title="Musique", description=f"La musique `{mu}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
                     await interaction.followup.send(embed=embed)
@@ -959,9 +961,11 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                     played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[interaction.guild.id]['time']))
                     embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
                 else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
-                return await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
+                await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
+                if self.player.guild.id in self.bot.server_music_session:
+                    self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
             elif button.custom_id == "like":
-                current = self.bot.current_track[self.serverid]
+                current = self.player.current.extras._name
                 if current:
                     async with self.bot.pool.acquire() as conn:
                         async with conn.transaction():
@@ -1717,29 +1721,38 @@ class Music(commands.Cog):
 
 # Music controler
     @commands.hybrid_command(name='skip', aliases=["next"]) # old: /skip
-    async def skip(self, ctx: commands.Context):
+    @app_commands.describe(position="La position de la musique à passer. (rien pour passer la musique actuelle)")
+    async def skip(self, ctx: commands.Context, position:int=None):
         """Passer la musique actuelle."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if ctx.channel.name != "musique":
                 embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
                 return await ctx.send(embed=embed, ephemeral=True)
+            if position is not None and (position < 1 or position > 5):
+                return await ctx.send(embed=create_embed(title="Erreur", description="La position doit être entre 1 et 5."))
             player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
             if not player:
                 return
-            cur_track = f"`{player.current.extras._name}` (**{player.current.extras._index}**)"
+            if position is None:
+                cur_track = f"`{player.current.extras._name}` (**{player.current.extras._index}**) a été passé par "
+                await player.skip(force=True)
+            else:
+                _cur_track = player.queue.get_at(position - 1)
+                cur_track = f"`{_cur_track.extras._name}` (**{_cur_track.extras._index}**) a été retiré de la queue par "
+            if ctx.guild.id in self.bot.server_music_session:
+                self.bot.server_music_session[ctx.guild.id]['nb'] +=  1
             if ctx.guild.id in self.bot.musics_ui_status:
                 self.bot.musics_ui_status[ctx.guild.id] = False
             try:
                 self.bot.locks[ctx.guild.id].release()
             except RuntimeError:
                 pass
-            await player.skip(force=True)
             try:
                 await ctx.message.add_reaction("\u2705")
             except discord.errors.NotFound:
                 pass
-            embed = create_embed(title="Musique", description=f"La musique {cur_track} a été passé par <@{ctx.author.id}>.")
+            embed = create_embed(title="Musique", description=f"La musique {cur_track}  <@{ctx.author.id}>.")
             return await ctx.send(embed=embed)
         except:
             LogErrorInWebhook()
@@ -1763,6 +1776,7 @@ class Music(commands.Cog):
             if ctx.guild.id in self.bot.server_music_session:
                 played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[ctx.guild.id]['time']))
                 embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[ctx.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
+                self.bot.server_music_session[ctx.guild.id] = {'nb': 0, 'time': 0}
             else: embed = create_embed(title="Musique", description="Trapard déconnecté du vocal par <@" + str(ctx.author.id) + ">.")
 
             await player.disconnect()
