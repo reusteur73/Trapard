@@ -6,14 +6,14 @@ import concurrent.futures
 from Cogs.utils.context import Context
 import asqlite, logging
 from typing import Dict
-from Cogs.music import EndSessionBtn, PlayAllViewV2, draw_music
+from Cogs.music import EndSessionBtn, PlayAllViewV2, draw_music, download
 from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler
 from Cogs.utils.data import FULL_EMOJIS_LIST
-from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats
-from Cogs.utils.path import DB_PATH
+from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats, getVar
+from Cogs.utils.path import DB_PATH, MAIN_DIR
 from asyncio import sleep
 from wavelink import Player
-import asyncio, openai, os, wavelink
+import asyncio, openai, os, wavelink, traceback, re, html, time
 
 initial_extensions = [
     "Cogs.rappels",
@@ -30,14 +30,13 @@ initial_extensions = [
     # "Cogs.blocker",
     "Cogs.IA",
 ]
-# logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
 log = logging.getLogger(name="app.log")
 
 DEBUG = True
 
 class ServerUI:
-    def __init__(self, bot, player, downloader_id, track_name, track_index, track_duration, txt_channel_id):
+    def __init__(self, bot, player, downloader_id, track_name, track_index, track_duration, txt_channel_id, _video=None):
         self.bot = bot
         self.player: Player = player
         self.downloader_id = downloader_id
@@ -51,81 +50,133 @@ class ServerUI:
         self.loop = asyncio.get_event_loop()
         self._task = None
         self.guild_id = None
+        self.played_time = 0
+        self._video=_video
 
     async def start(self):
-        self._running = True
-        self.current_song_pbar = None
-        start_time = perf_counter()
-        txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
-        self.guild_id = txt_channel.guild.id
-        if self.guild_id not in self.bot.server_music_session:
-            self.bot.server_music_session[self.guild_id] = {'time': 0, 'nb': 0}
-        self.bot.musics_ui_status[self.guild_id] = True
-        user = await self.bot.fetch_user(self.downloader_id)
-        downloader_avatar = user.display_avatar
-        async with self.bot.session.get(str(downloader_avatar)) as r:
-            _avatar = await r.read()
-            with open(f"/home/debian/trapard/files/{self.guild_id}_avatar.png", "wb") as f:
-                f.write(_avatar)
-        self.avatar = f"/home/debian/trapard/files/{self.guild_id}_avatar.png"
-        self.downloader_name = user.display_name
-
-        print(f"[F] MusicUITask started for {self.track_name}")
-
-        while self.player.playing and self._running:
-            loop_time = perf_counter()
-            current_time = perf_counter() - start_time
-            view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
-            next_musics = ["Aucune musique en attente" if len(self.player.queue) == 0 else f"{music.extras._name} ({music.extras._index})" for music in self.player.queue[:4]]
-            curent_timecode = int(current_time)
-            pourcent = str(int(current_time * 100 / int(self.track_duration)))
-            await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, int(pourcent), str(convert_to_minutes_seconds(str(curent_timecode))), convert_to_minutes_seconds(self.track_duration), next_musics, f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
-            file = discord.File(f"/home/debian/trapard/files/{self.guild_id}_music_player.png", filename=f"Music.png")
-            embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
-            embed.set_image(url=f"attachment://Music.png")
-            last_message = await get_latest_message_from_channel(txt_channel)
-            if self.current_song_pbar is None:
-                self.current_song_pbar = await txt_channel.send(embed=embed, file=file, view=view)
+        try:
+            from Cogs.utils.classes import VideoDB
+            self._running = True
+            self.current_song_pbar = None
+            start_time = perf_counter()
+            if self.txt_channel_id:
+                txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
             else:
-                if self.current_song_pbar.id != last_message.id:
-                    if random.randint(0, 5) == 0:
-                        await self.current_song_pbar.delete()
-                        self.current_song_pbar = await txt_channel.send(embed=embed, view=view, file=file)
-                        last_message = self.current_song_pbar
-                    else:
-                        await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
+                txt_channel = discord.utils.get(self.player.guild.channels, name="musique", type=discord.ChannelType.text)
+                self.txt_channel_id = txt_channel.id
+            self.guild_id = txt_channel.guild.id
+            if self.guild_id not in self.bot.server_music_session:
+                self.bot.server_music_session[self.guild_id] = {'time': 0, 'nb': 0}
+            user = await self.bot.fetch_user(self.downloader_id)
+            downloader_avatar = user.display_avatar
+            async with self.bot.session.get(str(downloader_avatar)) as r:
+                _avatar = await r.read()
+                with open(f"{MAIN_DIR}files/{self.guild_id}_avatar.png", "wb") as f:
+                    f.write(_avatar)
+            self.avatar = f"{MAIN_DIR}/files/{self.guild_id}_avatar.png"
+            self.downloader_name = user.display_name
+            try:
+                if not self._video:
+                    self.video = VideoDB.from_row(self.player.current.extras)
                 else:
-                    await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
-            if not self.player.playing:
-                break
-            await asyncio.sleep(3)
-            if self.guild_id in self.bot.server_music_session:
-                self.bot.server_music_session[self.guild_id]['time'] +=  int(perf_counter() - loop_time)
-                print(f"Added {int(perf_counter() - loop_time)} to {self.guild_id} session time.")
-        
-        
-        current_time = perf_counter() - start_time
-        await save_song_stats(time=int(current_time), number=1, pool=self.bot.pool)
-        await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, 100, str(convert_to_minutes_seconds(str(self.track_duration))), convert_to_minutes_seconds(self.track_duration), [], f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
-        file = discord.File(f"/home/debian/trapard/files/{self.guild_id}_music_player.png", filename=f"Music.png")
-        embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
-        embed.set_image(url=f"attachment://Music.png")
-        self.bot.musics_ui_status[self.guild_id] = False
-        if self.current_song_pbar:
-            await self.current_song_pbar.edit(embed=embed, attachments=[file])
+                    self.video = self._video
+            except Exception as e:
+                print("cant get video:", e)    
+
+            while self.player.playing and self._running:
+                try:
+                    loop_time = perf_counter()
+                    current_time = perf_counter() - start_time
+                    view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
+                    self.next_musics = [VideoDB.from_row(music.extras) for music in self.player.queue[:8]]
+                    curent_timecode = int(current_time)
+                    print(f"{curent_timecode}/{self.track_duration}")
+                    try:
+                        await asyncio.to_thread(draw_music, self.guild_id, curent_timecode, self.video, self.next_musics)
+                    except AttributeError:
+                        await asyncio.to_thread(draw_music, self.guild_id, curent_timecode, self._video, self.next_musics)
+                    file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_music_player.png", filename=f"Music.png")
+                    try:
+                        raw_txt = f"{self.video.name} ({self.video.pos})"
+                        pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
+                        match = re.search(pattern, raw_txt)
+                        if match:
+                            name = match.group(1)
+                            pos = match.group(2)
+                        else:
+                            name = self.video.name
+                        embed = discord.Embed(title=f"Musique {html.escape(name)} ({pos})", description=f" ", color=0x2F3136)
+                    except:
+                        embed = discord.Embed(title=f"Musique {html.unescape(self.video.name)} (autoplay)", description=f" ", color=0x2F3136)
+                    embed.set_image(url=f"attachment://Music.png")
+                    last_message = await get_latest_message_from_channel(txt_channel)
+                    if self.current_song_pbar is None:
+                        self.current_song_pbar = await txt_channel.send(embed=embed, file=file, view=view)
+                    else:
+                        try:
+                            if self.current_song_pbar.id != last_message.id:
+                                if random.randint(0, 5) == 0:
+                                    await self.current_song_pbar.delete()
+                                    self.current_song_pbar = await txt_channel.send(embed=embed, view=view, file=file)
+                                    last_message = self.current_song_pbar
+                                else:
+                                    await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
+                            else:
+                                await self.current_song_pbar.edit(embed=embed, view=view, attachments=[file])
+                        except discord.errors.HTTPException:
+                            pass
+                    if not self.player.playing:
+                        print("Breaked because player stopped")
+                        break
+                    await asyncio.sleep(4.5)
+                    if self.guild_id in self.bot.server_music_session:
+                        self.bot.server_music_session[self.guild_id]['time'] +=  int(perf_counter() - loop_time)
+                    self.played_time += perf_counter() - loop_time
+
+                    if isinstance(self.video.duree, tuple):
+                        _, _duree = self.video.duree
+                        duree = int(str(_duree).split(".")[0])
+                    elif isinstance(self.video.duree, float):
+                        duree = int(int(str(self.video.duree).split(".")[0]))
+                    else:
+                        duree = int(self.video.duree)
+                    if int(current_time) > (duree * 1.05):# If current time is 5% bigger than song time, cancel the task
+                        LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) has overplayed.")
+                        try:
+                            await self.stop()
+                        finally:
+                            return
+                except Exception as e:
+                    traceback.print_exc()
+                    print("\n"*3)
+                    await sleep(3)
+            return
+        except Exception as e:
+            print("Music UI start error:", e)
+            traceback.print_exc()
 
     async def stop(self):
         self._running = False
         print("[F] MusicUITask stopped for", self.track_name)
-        
+        if self.played_time > 4:
+            await save_song_stats(time=int(self.played_time), number=1, pool=self.bot.pool)
         if self.guild_id in self.bot.server_music_session:
             self.bot.server_music_session[self.guild_id]['nb'] +=  1
         if self.current_song_pbar:
-            await asyncio.to_thread(draw_music, f'{self.track_name} ({self.track_index})', self.downloader_name, 100, str(convert_to_minutes_seconds(str(self.track_duration))), convert_to_minutes_seconds(self.track_duration), [], f"({len(self.player.queue)} musiques en queue)", self.guild_id, self.avatar)
-            file = discord.File(f"/home/debian/trapard/files/{self.guild_id}_music_player.png", filename=f"Music.png")
-            embed = discord.Embed(title=f"Musique", description=f" ", color=0x2F3136)
+            await asyncio.to_thread(draw_music, self.guild_id, 0, self.video, self.next_musics, True)
+            file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_music_player.png", filename=f"Music.png")
+            try:
+                raw_txt = f"{self.video.name} ({self.video.pos})"
+                pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
+                match = re.search(pattern, raw_txt)
+                if match:
+                    name = match.group(1)
+                    pos = match.group(2)
+                embed = discord.Embed(title=f"Musique {html.unescape(name)} ({pos})", description=f" ", color=0x2F3136)
+            except:
+                embed = discord.Embed(title=f"Musique {html.unescape(self.video.name)} (autoplay)", description=f" ", color=0x2F3136)
             embed.set_image(url=f"attachment://Music.png")
-            await self.current_song_pbar.edit(embed=embed, attachments=[file])
+            await self.current_song_pbar.edit(embed=embed, attachments=[file], view=None)
         return
 
     @property
@@ -135,7 +186,7 @@ class ServerUI:
     @task.setter
     def task(self, __value):
         self._task = __value
-    
+
 async def get_unique_downloader(pool: asqlite.Pool):
     """
     return list of unique userid music downloader.
@@ -189,7 +240,7 @@ class Trapard(commands.Bot):
         # Setting db 
         self.pool: asqlite.Pool = await asqlite.create_pool(DB_PATH)
 
-        nodes = [wavelink.Node(uri="http://127.0.0.1:2333", password=os.environ.get("LAVALINK_PWD"))]
+        nodes = [wavelink.Node(uri="http://127.0.0.1:2333", password=getVar("LAVALINK_PWD"))]
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=None)
         # setting music values
         self.music_queues = {}
@@ -198,7 +249,6 @@ class Trapard(commands.Bot):
         self.unique_downloader_display_names = {}
         self.unique_downloader_avatars = {}
 
-        self.musics_ui_status = {}
         self.server_music_session = {}
 
         self.locks: Dict[int, asyncio.Lock] = {}
@@ -227,7 +277,7 @@ class Trapard(commands.Bot):
 
         # Open IA client
         self.IAclient = openai.AsyncOpenAI(
-            api_key=os.environ.get("OPEN_IA_API")
+            api_key=getVar("OPEN_IA_API")
         )
         self.msgMemory = [{"role": "system", "content": "Vous êtes Trapard un assistant performant qui aide les gens."}]
 
@@ -259,7 +309,6 @@ class Trapard(commands.Bot):
                 log.exception('Failed to load extension %s.', extension)
                 if DEBUG:
                     print(f'Failed to load extension {extension}.\n{e}')
-                
 
     @property
     def owner(self) -> discord.User:
@@ -268,7 +317,11 @@ class Trapard(commands.Bot):
     # BOT EVENTS :
 
     async def on_wavelink_track_exception(self,payload: wavelink.TrackExceptionEventPayload):
-        print("on_wavelink_track_exception:",payload.exception)
+        try:
+            print("[P] Possible corrupted file:", payload.track.extras.name)
+        except:
+            print("[P] Possible corrupted file:", payload.track.title)
+
 
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
         # await asyncio.sleep(1)
@@ -278,52 +331,69 @@ class Trapard(commands.Bot):
             return
         original: wavelink.Playable | None = payload.original
         track: wavelink.Playable = payload.track
-        print(f"[+] track {track.extras._name}\n")
+        data = dict(track.extras)
         guild_id = player.guild.id
         if guild_id not in self.locks:
             self.locks[guild_id] = asyncio.Lock()
-        try:
-            music_task = ServerUI(bot=self, player=player, downloader_id=track.extras._downloader, track_name=track.extras._name, track_index=track.extras._index, track_duration=track.extras._duration, txt_channel_id=track.extras._txt_chann)
-            music_task.task = asyncio.create_task(music_task.start())
-            self.ui_V2[guild_id] = music_task
-        except Exception as e:
-            print(e)
-            LogErrorInWebhook()
-            pass
+        await sleep(0.8)
+        if data:
+            print(f"[+] track {data['name']}\n")
+            try:
+                music_task = ServerUI(bot=self, player=player, downloader_id=data['downloader'], track_name=data['name'], track_index=data['pos'], track_duration=data['duree'], txt_channel_id=data['txt_channel_id'])
+                music_task.task = asyncio.create_task(music_task.start())
+                print(f"task started for {data['name']}")
+                self.ui_V2[guild_id] = music_task
+            except Exception as e:
+                print(e)
+                LogErrorInWebhook()
+                pass
+        else:
+            try:
+                print(f"[I] track is from autoplay and his id is: {track.identifier}")
+                result = await download(pool=self.pool, session=self.session, video_id=track.identifier, downloader=1065781211219370104, is_autoplay=True)
+                print(f"result: {result}")
+                music_task = ServerUI(bot=self, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=result.pos, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result)
+                music_task.task = asyncio.create_task(music_task.start())
+                print(f"task started for {result.name}")
+                self.ui_V2[guild_id] = music_task
+            except Exception as e:
+                print("EE", e)
 
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player: wavelink.Player | None = payload.player
         if not player:
             return
-    
         track: wavelink.Playable = payload.track
-        print(f"[-] track {track.extras._name} ended\n")
+        data = dict(track.extras)
         guild_id = player.guild.id
-        
-        self.last_music[guild_id] = track.extras._name
+        if len(player.channel.members) == 1:
+            try:
+                await player.disconnect()
+                played_time = format_duration(str(self.server_music_session[guild_id]['time']))
+                embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.server_music_session[guild_id]['nb']} musiques, pour une durée de **{played_time}**!")
+                self.server_music_session[player.guild.id] = {'nb': 0, 'time': 0}
+                zic_chann = discord.utils.get(player.guild.channels, name="musique", type=discord.ChannelType.text)
+                if zic_chann is not None:
+                    view = EndSessionBtn(bot=self)
+                    await zic_chann.send(embed=embed,view=view)
+            except Exception as e:
+                print("X01:", e)
+        if data:
+            print(f"[-] track {data['name']} ended\n")
+            self.last_music[guild_id] = data['name']
+        else:
+            print(f"[-] track {track.identifier} ended\n")
         try:
             if guild_id in self.ui_V2:
                 await self.ui_V2[guild_id].stop()
                 self.ui_V2[guild_id].task.cancel()
         except Exception as e:
             print("X02:", e)
-            pass
         if len(player.queue) > 0:
             if len(player.channel.voice_states) > 1:
                 next_track: wavelink.Playable = player.queue.get()
-                await player.play(next_track)
-            else:
-                if guild_id in self.server_music_session:
-                    played_time = convert_to_minutes_seconds(str(self.server_music_session[guild_id]['time']))
-                    embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.server_music_session[guild_id]['nb']} musiques, pour une durée de **{played_time}**!")
-                    self.server_music_session[player.guild.id] = {'nb': 0, 'time': 0}
-                    zic_chann = discord.utils.get(player.guild.channels, name="musique", type=discord.ChannelType.text)
-                    if zic_chann is not None:
-                        view = EndSessionBtn(bot=self)
-                        await zic_chann.send(embed=embed,view=view)
-        else:
-            await player.disconnect()
-            self.musics_ui_status[guild_id] = False
+                print(next_track.identifier, " next track")
+                return await player.play(next_track)
         return
 
     async def on_message(self, message: discord.Message):
@@ -713,10 +783,16 @@ class Trapard(commands.Bot):
                         if int(time_spent) > 0:
                             chann = self.get_channel(1066378588896624650)
                             if chann:
-                                embed = create_embed(title="Vocal", description=f"{member.mention} est resté **{format_duration(int(time_spent))}** dans <#{before.channel.id}>.")
+                                embed = create_embed(title="Journal du vocal", description=f"{member.mention} est resté **{format_duration(int(time_spent))}** dans <#{before.channel.id}>.")
                                 await chann.send(embed=embed)
                 if after.channel: # Si le membre est dans un channel
                     self.vocal_times[member.id] = now  # Met à jour le temps vocal de l'utilisateur
+                    if after.channel.guild.id == 818719429273452605:
+                        chann = self.get_channel(1066378588896624650)
+                        if chann:
+                            timestamp = time.time()
+                            embed = create_embed(title="Journal du vocal", description=f"{member.mention} a rejoint <#{after.channel.id}> <t:{int(timestamp) + 5}:R> à <t:{int(timestamp) + 30}:T>.")
+                            await chann.send(embed=embed)
         except: LogErrorInWebhook()
 
 async def fetch_diplay_name(userid: int, bot: Trapard):

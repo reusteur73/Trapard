@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from utils.path import IA_RENCONTRE_MODEL, IA_RENCONTRE_TXT
+from .path import IA_RENCONTRE_MODEL, IA_RENCONTRE_TXT
 
 batch_size = 64
 block_size = 256 

@@ -1,14 +1,14 @@
-from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, create_embed, seconds_until, write_item, convert_txt_to_colored
+from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, create_embed, seconds_until, write_item, convert_txt_to_colored,getVar
 from .utils.data import interests_indexs, interests_infos
 from asyncio import sleep
 from bs4 import BeautifulSoup
-import discord, time, datetime, os, re
+import discord, time, datetime, json, re
 from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
 from asqlite import Pool
 
-APIKEY = os.environ.get("CRYPTO_API")
+APIKEY = getVar("CRYPTO_API")
 
 async def xp_calculation(user_id: str, pool: Pool):
     """
@@ -45,6 +45,21 @@ class RencontreNc:
             data = await conn.fetchone("SELECT annonce_id FROM rencontresNC WHERE annonce_id = ?", (id,))
         return bool(data)
 
+class Informatique:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+
+    async def save(self, id:int, user_id: int,text:str, title: str, medias: list, created_at: str):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                medias_json = json.dumps(medias)
+                await conn.execute("INSERT INTO Annonces_nc_Informatique (annonce_id, user_id, titre, texte, medias, created_at) VALUES (?,?,?,?,?,?)", (id,user_id,title, text, medias_json, created_at,))
+
+    async def is_in(self, id:int):
+        async with self.pool.acquire() as conn:
+            data = await conn.fetchone("SELECT annonce_id FROM Annonces_nc_Informatique WHERE annonce_id = ?", (id,))
+        return bool(data)
+    
 class Tasks(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
         self.bot = bot
@@ -60,6 +75,7 @@ class Tasks(commands.Cog):
         self.cpas_bien.start()
         self.check_users_xp.start()
         self.rencontres_nc.start()
+        self.informatique.start()
 
     @tasks.loop(minutes=1)
     async def update_status(self):
@@ -357,5 +373,36 @@ class Tasks(commands.Cog):
             if len(nums_found) > 0:
                 embed = create_embed(title="Numéro trouvé", description=f"Dans les {sent} dernières annonces, j'ai trouvé {len(nums_found)} numéros.\nVoici la liste\n" + "\n- ".join(set(nums_found)))
                 await channel.send(embed=embed)
+
+    @tasks.loop(minutes=30)
+    async def informatique(self):
+        handler = Informatique(pool=self.bot.pool)
+        channel = await self.bot.fetch_channel(1336339577757106276)
+        async with self.bot.session.get("https://api.annonces.nc/posts?by_category=informatique-1&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1") as resp:
+            data = await resp.json()
+        if data:
+            for post in data:
+                async with self.bot.session.get(f'https://api.annonces.nc/posts/{post["slug"]}') as post_resp:
+                    post_data = await post_resp.json()
+                if post_data:
+                    texte = post_data["description"]
+                    titre = post_data["title"]
+                    idx = post_data["id"]
+                    user_id = post_data["user_id"]
+                    prix = post_data["price"]
+                    is_in = await handler.is_in(idx)
+                    if not is_in:
+                        if len(texte) < 4096:
+                            embed = create_embed(title=titre, description=f"{texte}\n\n# Prix : {afficher_nombre_fr(prix)} XPF")
+                            embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
+                            medias = []
+                            if post_data.get("medias"):
+                                for media in post_data["medias"]:
+                                    if 'large' in media['versions']:
+                                        embed.set_image(url=media['versions']['large']['url'])
+                                        medias.append(media['versions']['large']['url'])
+                                        break
+                            await channel.send(embed=embed)
+                        await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
 async def setup(bot: Trapard):
     await bot.add_cog(Tasks(bot))

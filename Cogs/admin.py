@@ -174,11 +174,15 @@ class Admin(commands.Cog):
                     cmd = await fetch_func(query)
                     output = cmd
                 if output is not None:
+                    print(output, len(output))
+                    if (isinstance(output, int)) or (len(output)) == 1:
+                        return await ctx.send(f"Query returned: {output[0]}")
                     print(len(output))
                     embeds = []
                     embed = discord.Embed(title="SQL request")
                     field = "```"
                     for i, row in enumerate(output):
+                        print(row)
                         if i % 10 == 0 and i != 0:
                             field += "```"
                             embed.add_field(name=f"Page 1", value=field, inline=False)

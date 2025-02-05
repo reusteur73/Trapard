@@ -1,9 +1,9 @@
-import discord, os,base64, json
+import discord,base64, json
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from bot import Trapard
 from uuid import uuid4
-from .utils.functions import create_embed, LogErrorInWebhook, command_counter, load_json_data, format_duration
+from .utils.functions import create_embed, LogErrorInWebhook, command_counter, load_json_data, format_duration, getVar
 from .utils.sudoku import main as sudoku_generator
 from typing import Literal
 from aiohttp import ClientSession
@@ -40,7 +40,7 @@ class SudoMots(commands.Cog):
             # store game data in channel 
             msg = f"Game ID = {game_id}\n\nGame URL = {sudoku_dict['url']}\nGame DATA = {sudoku_dict['list']}\nUserID = {username}\nDifficultée = {difficulte}\ninit chann = {init_chann}"
             async with ClientSession() as session:
-                webhook = discord.Webhook.from_url(os.environ.get("SUDOKU_WEBHOOK"), session=session)
+                webhook = discord.Webhook.from_url(getVar("SUDOKU_WEBHOOK"), session=session)
                 await webhook.send(content=msg)
             return
         except Exception as e:
@@ -91,7 +91,7 @@ class SudoMots(commands.Cog):
             liste_grille_encoded = base64.b64encode(json.dumps(liste_grille).encode('utf-8')).decode('utf-8')
             msg_webhook = f"Game ID: {gameid}\nUser ID: {userid}\nInit chann: {init_channel}\nMots voulue: {wanted_words}\nGrille: {liste_grille}"
             async with ClientSession() as session:
-                webhook = discord.Webhook.from_url(os.environ.get("MOTMEL_WEBHOOK"), session=session)
+                webhook = discord.Webhook.from_url(getVar("MOTMEL_WEBHOOK"), session=session)
                 await webhook.send(content=msg_webhook)
             url = f"http://www.reusteur.org/mot-meles/jeu.php?grille={liste_grille_encoded}&words={wanted_words_encoded}&userid={userid}&gameid={gameid}"
             # short the link

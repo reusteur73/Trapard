@@ -1,7 +1,7 @@
 import os, discord, random, asyncio, datetime, torch, inspect, urllib3, traceback, json
 from discord.ui import UserSelect
 from discord import app_commands
-from .utils.functions import LogErrorInWebhook, format_duration, create_embed, command_counter, printFormat, convert_str_to_emojis, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data, is_url
+from .utils.functions import LogErrorInWebhook, format_duration, create_embed, command_counter, printFormat, convert_str_to_emojis, getDriver, lol_player_in_game, afficher_nombre_fr, calc_usr_gain_by_tier, convert_k_m_to_int, get_rule34_data, is_url, getVar
 from .utils.data import LANGUAGES
 from .utils.classes import Trapardeur, TrapcoinsHandler
 from .utils.context import Context
@@ -26,7 +26,7 @@ from asqlite import Pool
 from datetime import datetime
 from bs4 import BeautifulSoup
 from TTS.api import TTS
-import pytz, re
+import pytz
 
 
 def get_local_time(country_code):
@@ -271,7 +271,7 @@ async def some_more_stats(session: ClientSession):
         async with session.get(url, headers=headers) as resp:
             commits = await resp.json()
             return len(commits)
-    access_token = os.environ.get("GITHUB_API")
+    access_token = getVar("GITHUB_API")
     commit_count = await get_commit_count(access_token)
     text = ""
     if commit_count is not None:
@@ -1440,7 +1440,7 @@ class Misc(commands.Cog):
             except:pass
             url = f"https://fortnite-api.com/v2/stats/br/v2?name={pseudo}&accountType={platforme.value}&timeWindow={temps.value}&image=all"
             headers = {
-                "Authorization": os.environ.get("FORTNITE_API"),
+                "Authorization": getVar("FORTNITE_API"),
                 "Content-Type": "application/json",
             }
             async with self.bot.session.get(url, headers=headers) as response:
@@ -1601,7 +1601,7 @@ class Misc(commands.Cog):
         """Report un bug de Trapard."""
         await command_counter(user_id=str(ctx.author.id), bot=self.bot)
         text = bug + f"\nEnvoyé par {ctx.author.name}."
-        DiscordWebhook(url=os.environ.get("REPORT_BUG_WEBHOOK"), content=text).execute()
+        DiscordWebhook(url=getVar("REPORT_BUG_WEBHOOK"), content=text).execute()
         return await ctx.send("Le message a bien été envoyé, !Reu$ va regarder cela soon ! Merci pour l'info.", ephemeral=True)
 
     @commands.hybrid_command(name="pierre-feuille-ciseaux", aliases=["pfc"])

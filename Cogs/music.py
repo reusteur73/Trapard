@@ -1,16 +1,102 @@
-from typing import Literal, List, Tuple, cast, TYPE_CHECKING
+from typing import Literal, List, Tuple, cast
 from discord.ext import commands
+from .utils.classes import VideoDB
 from youtube_search import YoutubeSearch
 from discord import app_commands
 from pytube import YouTube
-from time import perf_counter
-from asyncio import sleep
-from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, save_song_stats
-from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD
+from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, afficher_nombre_fr, get_next_index, getVar
+from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink
+import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, html
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
+from wavelink import AutoPlayMode
+from aiohttp import ClientSession
+
+async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False):
+    
+    async def save_to_db(video: VideoDB, dler:int, pool:Pool, index:int):
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO musiquesV3 (pos, duree, name, artiste, downloader, thumbnail, channel_avatar, likes, views, video_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (index, video.duree, video.name, video.artiste, dler, video.thumbnail, video.channel_avatar, video.likes, video.views, video.video_id))
+        return
+    
+    async def download_image(url: str, _type: Literal["thumb","avatar"], video_id: str) -> str:
+        if url == "N/A":
+            print("N/A")
+            return "N/A"
+        if is_autoplay:
+            auto = "autoplay_"
+        else:
+            auto = ""
+        if os.path.exists(f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"):
+            print(f"Already exists {video_id}_{_type}.jpg")
+            return f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"
+        async with session.get(url) as response:
+            data = await response.read()
+        with open(f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg", "wb") as f:
+            f.write(data)
+        return f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"
+
+    async def get_info(_id: str, dler, i) -> VideoDB:
+        async with session.get(f"https://www.youtube.com/watch?v={_id}") as resp:
+            page = await resp.text()
+        try:
+            title = html.unescape(page.split('{"contents":[{"videoPrimaryInfoRenderer":{"title":{"runs":[{"text":"')[1].split('"}]}')[0])
+        except:
+            title = "Unknown Title"
+        try:
+            channel = page.split('Accéder à la chaîne – ')[1].split(' -')[0]
+        except:
+            channel = "Various Artists"
+        try:
+            likes = page.split('{"iconName":"LIKE","title":"')[1].split('"')[0]
+        except:
+            likes = 666
+        try:
+            views = html.unescape(page.split('"shortViewCount":{"simpleText":"')[1].split('"')[0])
+        except:
+            views = 666
+        try:
+            duration = int(page.split('"lengthInSeconds":')[1].split(',"')[0])
+        except:
+            duration = 180
+        try:
+            thumb = await download_image(f"https://img.youtube.com/vi/{_id}/maxresdefault.jpg", "thumb", _id)
+        except:
+            thumb = f"https://img.youtube.com/vi/{_id}/maxresdefault.jpg"
+        channel_avatar = await download_image(page.split('{"videoOwnerRenderer":{"thumbnail":{"thumbnails":[{"url":"')[1].split('","width":176,"height":176}]}')[0].split('{"url":"')[-1], 'avatar', _id)
+        v = VideoDB(id=0,pos=i, duree=duration, name=title, artiste=channel, downloader=dler, thumbnail=thumb, channel_avatar=channel_avatar, likes=likes, views=views, video_id=_id)
+        if not is_autoplay:
+            await save_to_db(v, dler, pool, index=i)
+        return v
+
+    # First of all check if the video is already in the db
+    if not is_autoplay:
+        async with pool.acquire() as conn:
+            data = await conn.fetchone("SELECT * FROM musiquesV3 WHERE video_id = ?", (video_id,))
+        if data:
+            data_list = list(data)
+            if 'debian' in str(data_list[6]):
+                data_list[6] = str(data_list[6]).replace("debian", "dreus")
+            if 'debian' in str(data_list[7]):
+                data_list[7] = str(data_list[7]).replace("debian", "dreus")
+            return VideoDB(id=data_list[0], pos=data_list[1], duree=data_list[2], name=data_list[3], artiste=data_list[4], downloader=data_list[5], thumbnail=data_list[6], channel_avatar=data_list[7], likes=data_list[8], views=data_list[9], video_id=data_list[10])
+        next_index = await get_next_index(pool)
+        video = await get_info(video_id, downloader, next_index)
+        return video
+    else:
+        next_index = await get_next_index(pool)
+        video = await get_info(video_id, downloader, next_index)
+        return video
+
+async def get_thumb(session: ClientSession, video_id:str):
+    url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+    async with session.get(url) as response:
+        data = await response.read()
+    with open(f"/home/dreus/trapard/files/mlist_images/{video_id}_thumb.jpg", "wb") as f:
+        f.write(data)
+    return f"/home/dreus/trapard/files/mlist_images/{video_id}_thumb.jpg"
 
 def is_comma_separated(index_string):
     """Check if there is a `,` or `-` in given string, return True or False"""
@@ -150,6 +236,13 @@ def parse_user_indexs(chaine: str):
     except:
         LogErrorInWebhook()
 
+def is_indexs(chaine: str):
+    """
+    check if a string is a list of indexs
+    """
+    ALLOWED = ["1","2","3","4","5","6","7","8","9","0", "*", '-', ","]
+    return all(char in ALLOWED for char in chaine)
+
 def create_progress_bar(current_time: int, total_time: int, bar_length=20):
     progress = current_time / total_time
     num_bar_filled = int(bar_length * progress)
@@ -170,39 +263,29 @@ def getMusicList(playlistname):
     except Exception as e:
         LogErrorInWebhook()
 
-def draw_music(
-        music_name: str,
-        downloader: str,
-        pbar_percent: int,
-        track_duration: str,
-        current_track_time: str,
-        next_musics: list,
-        queue_len: str,
-        serverid: int,
-        avatar: str = None,
-    ):
+def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musics: List[VideoDB], ended=False):
     
-    def draw_text(
-        draw: ImageDraw.ImageDraw,
-        text: str,
-        coordinates: Tuple[int, int],
-        box_size: Tuple[int, int],
-        font: ImageFont.FreeTypeFont,
-        fill: str,
-    ) -> None:
+    def minutes_to_time(minutes: int) -> str:
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours:02}:{mins:02}"
+
+    def draw_text(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
         text_width, text_height = draw.textlength(text, font=font), 24
-
-        coordinates = (
-            int(coordinates[0] + (box_size[0] - text_width) // 2),
-            int(coordinates[1] + (box_size[1] - text_height) // 2),
-        )
-
+        
+        # Fixer la coordonnée x à celle de départ de la boîte pour aligner le texte à gauche
+        x = coordinates[0]
+        
+        # Calculer la coordonnée y pour centrer verticalement le texte
+        y = int(coordinates[1] + (box_size[1] - text_height) // 2)
+        
         draw.text(
-            coordinates,
+            (x, y),
             text,
             font=font,
             fill=fill,
         )
+    
     def add_corners(im, rad):
         circle = Image.new('L', (rad * 2, rad * 2), 0)
         draw = ImageDraw.Draw(circle)
@@ -215,57 +298,126 @@ def draw_music(
         alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
         im.putalpha(alpha)
         return im
-    
-    FONT = "/home/debian/trapard/files/Retron2000.ttf"
-    img = Image.open("/home/debian/trapard/files/music_img.png")
 
-    # Defining draw
+    def draw_textV2(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
+        """Helper function to split text into lines based on box width"""
+        def split_text_into_lines(text: str, max_width: int, font: ImageFont.FreeTypeFont):
+            words = text.split()
+            lines = []
+            current_line = ""
+            returned = 0
+            for word in words:
+                test_line = f"{current_line} {word}".strip()
+                test_width = draw.textlength(test_line, font=font)
+                if test_width <= max_width:
+                    current_line = test_line
+                else:
+                    lines.append(current_line)
+                    current_line = word
+                    returned += 1
+                    if returned == 4:
+                        break
+            
+            lines.append(current_line)
+            return lines
+        
+        lines = split_text_into_lines(text, box_size[0], font)
+        line_height = 30
+        
+        x, y = coordinates
+        for line in lines:
+            draw.text((x, y), line, font=font, fill=fill)
+            y += line_height
+
+    red = "#ee2408"
+    grey = "#808080"
+    PATH = "/home/dreus/trapard/files"
+    FONT = PATH + "/Roboto-Regular.ttf"
+
+    try:
+        _, duree = video.duree
+        _, thumbnail = video.thumbnail
+        _, channel_avatar = video.channel_avatar
+        _, name = video.name
+        _, likes = video.likes
+        _, views = video.views
+        _, artiste = video.artiste
+    except TypeError:
+        duree = video.duree
+        thumbnail = video.thumbnail
+        channel_avatar = video.channel_avatar
+        name = video.name
+        likes = video.likes
+        views = video.views
+        artiste = video.artiste
+
+
+
+    pbar_percent = current_track_time * 100 / int(duree)
+    img = Image.open(f"{PATH}/new_yt.png")
     draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT, 18)
 
-    fontLarge = ImageFont.truetype(FONT, 64)
-    fontSmall = ImageFont.truetype(FONT, 44)
-    if avatar is not None:
-        augm = len(downloader) * 20
-        _avatar = Image.open(avatar).convert("RGBA")
-        _avatar = add_corners(_avatar, 100)
-        _avatar = _avatar.resize((165, 165), Image.LANCZOS)
-        img.paste(_avatar, (1150 + augm, 166), _avatar)
-    else: print("avatar is None")
-    draw_text(draw, music_name, (900, 55), (155, 28), fontLarge, "white")
+    thumb = Image.open(thumbnail).convert("RGBA")
+    thumb = add_corners(thumb, 15)
+    thumb = thumb.resize((1350, 757), Image.LANCZOS)
+    img.paste(thumb, (30, 93), thumb)
 
-    draw_text(draw, downloader, (1100, 205), (0, 0), fontLarge, "white")
+    channel_avatar = Image.open(channel_avatar).convert("RGBA")
+    channel_avatar = add_corners(channel_avatar, 80)
+    channel_avatar = channel_avatar.resize((80, 80), Image.LANCZOS) # 
+    img.paste(channel_avatar, (50, 906), channel_avatar) #
 
-    draw_text(draw, f"{track_duration} / {current_track_time}", (960, 550), (0, 0), fontLarge, "white")
+    draw_text(draw, name, (31, 850), (0, 40), ImageFont.truetype(FONT, 40), "white")
 
-    draw_text(draw, f"{queue_len}", (1300, 695), (0, 0), fontSmall, "white")
+    draw_text(draw, artiste, (140, 910), (0, 40), ImageFont.truetype(FONT, 30), "white") #
 
-    for i, music in enumerate(next_musics):
-        draw_text(draw, music, (960, 800 + 70 * i), (0, 0), fontSmall, "white")
+    draw_text(draw, f"{likes}", (1125, 907), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
-    MAX = 1780
-    MIN = 139
+    draw_text(draw, f"{views}", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
-    if pbar_percent > 100:
+    for i, _video in enumerate(next_musics):
+        _, _thumbnail = _video.thumbnail
+        _, _name = _video.name
+        if i == 8:
+            break
+        thumb = Image.open(_thumbnail).convert("RGBA")
+        thumb = add_corners(thumb, 10)
+        thumb = thumb.resize((175, 110), Image.LANCZOS)
+        img.paste(thumb, (1420, 200 + 125 * i), thumb)
+
+        draw_textV2(draw, _name, (1610, 200 + 125 * i), (285, 100), ImageFont.truetype(FONT, 28), "white")
+
+
+    controls = Image.open(f"{PATH}/bottom_controls.png").convert("RGBA")
+    img.paste(controls, (30, 755), controls)
+
+    if ended:
         pbar_percent = 100
+        draw_text(draw, f"{minutes_to_time(int(duree))} / {minutes_to_time(int(duree))}", (355, 792), (0, 40), ImageFont.truetype(FONT, 30), "white")
+    else:
+        draw_text(draw, f"{minutes_to_time(current_track_time)} / {minutes_to_time(int(duree))}", (355, 792), (0, 40), ImageFont.truetype(FONT, 30), "white")
 
+    MAX = 1377
+    MIN = 28
     width = (MAX - MIN) * pbar_percent / 100
+    _pbar = pbar_percent + random.randint(2, 18)
+    if _pbar > 100:
+        _pbar = 100
+    width2 = (MAX - MIN) * _pbar / 100
 
-    draw.rounded_rectangle([(MIN, 360), (MIN + width, 497)], fill="green", outline="green", radius=25)
-
-    draw_text(draw, f"{pbar_percent}%", (960, 400), (0, 0), fontLarge, "black")
+    draw.rectangle([(MIN, 755), (MIN + width2, 784)], fill=grey, outline=grey)
+    draw.rectangle([(MIN, 755), (MIN + width, 784)], fill=red, outline=red)
 
     fp = io.BytesIO()
     img.convert("RGBA").save(fp, "PNG")
-    img.save(f"/home/debian/trapard/files/{serverid}_music_player.png")
+    img.save(f"{PATH}/{serverid}_music_player.png")
     return
 
 def getVideoId(title):
     try:
         results = YoutubeSearch(title, max_results=1).to_dict()
         id = results[0]["id"]
-        url = 'https://www.youtube.com/watch?v=' + id
-        return url
+        return id
     except Exception as e:
         LogErrorInWebhook()
 
@@ -346,8 +498,8 @@ class get_artist_from_title():
         self.artists = asyncio.run(self.main(title=title, access_token=token))
 
     async def get_access_token(self):
-        client_id = os.environ.get("SPOTIFY_CLIENT")
-        client_secret = os.environ.get("SPOTIFY_SECRET")
+        client_id = getVar("SPOTIFY_CLIENT")
+        client_secret = getVar("SPOTIFY_SECRET")
         # Définir les paramètres de la requête d'obtention du jeton d'accès
         data = {
             'grant_type': 'client_credentials'
@@ -530,14 +682,14 @@ class MusicList_Handler():
         return
 
     async def get_all_music_name(self):
-        """Return all music name in a dict where `key is music` name and `value is index`"""
+        """Return all music name in a dict where `key is video_id` and `value is [index, name]`"""
         try:
             async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall("SELECT name, pos FROM musiques")
+                data = await conn.fetchall("SELECT video_id, pos, name FROM musiquesV3")
             if data:
                 out = {}
                 for item in data:
-                    out[item[0]] = item[1]
+                    out[item[0]] = [item[1], item[2]]
                 return out
         except Exception as e:
             LogErrorInWebhook()
@@ -679,108 +831,6 @@ class SuggestionPlay(discord.ui.View):
             print(e)
             LogErrorInWebhook()
 
-async def download_from_url(url, user, channel_id, userid, serverid, cmd, music_list_handler: MusicList_Handler,music_session, bot, ctx: commands.Context=None):
-    """Download youtube video from url."""
-    def check_file(name:str):
-        """Check if file exists and is not empty"""
-        path = MUSICS_FOLDER
-        if name in os.listdir(path):
-            # Check file size
-            size = os.path.getsize(path + name)
-            if size > 0:
-                return True
-            else:
-                return False
-        else:
-            return False
-    
-    try:
-        video_url = url
-        video = YouTube(video_url)
-
-        music_artist = video.author
-        duration = video.length
-        file_name = rename(video.title)
-
-        formatMention = "<@" + str(userid) + ">"
-        if file_name in await music_list_handler.get_all_music_name():
-            name = file_name.replace(".mp3", "")
-            index, dler = await music_list_handler.get_index_by_music_name(name=name)
-            embed = create_embed(title="Erreur", description=f"- {formatMention}, il semble que la musique `{name}` ({convert_str_to_emojis(f'n {index}')}), ait déjà été téléchargée.\n\n- Le téléchargement a été annulé.")
-            if ctx is not None:
-                await ctx.send(embed=embed)
-            else:
-                await chann.send(embed=embed)
-            return False
-
-        url = video_url
-        if duration > 1500:
-            embed = create_embed(title="Erreur", description=f"- {formatMention}, la musique fait plus de **25 minutes**.\n\n- Le téléchargement a été annulé.")
-            if ctx is not None:
-                await ctx.send(embed=embed)
-            else:
-                await chann.send(embed=embed)
-            return False
-        
-
-        async def download_thread(url, channel_id):
-            # Code for downloading the video
-
-
-            video_url = url
-            
-            video = YouTube(video_url)
-
-            videoName = rename(video.title)
-            stream = video.streams.filter(only_audio=True).first()
-
-            stream.download(output_path=MUSICS_FOLDER, filename=f'{videoName}')
-
-        def run_thread(coro):
-            asyncio.run(coro)
-
-        # Start the download in a separate thread
-        thread = threading.Thread(target=run_thread, args=(download_thread(url, channel_id),))
-        thread.start()
-
-        # Wait for the thread to finish
-        thread.join()
-        index = await music_list_handler.get_next_index()
-        # Check if there was an exception in the thread
-        if thread.is_alive():
-            # The thread is still running, which means there was an exception
-            # Handle the exception here
-            return False
-        else:
-            if check_file(file_name) is False:
-                embed = create_embed(title="Erreur", description=f"- {formatMention}, il semble que la musique `{video.title}` n'ait pas été téléchargée.\n\n- La musique est peut-être soumise à une restriction d'âge ou n'existe pas.\n\n- Le téléchargement a été annulé.")
-                if ctx is not None:
-                    await ctx.send(embed=embed)
-                else:
-                    await chann.send(embed=embed)
-                return False
-            view = SuggestionPlay(server_id=serverid, ctx=ctx, bot=bot, index=index, music_list_handler=music_list_handler)
-            message = formatMention + f" La musique `{video.title}` **N°{index}** est téléchargée !"
-            chann = bot.get_channel(int(channel_id))
-            embed = create_embed(title="Musique", description=message)
-            if cmd != "DL":
-                if ctx is not None:
-                    await ctx.send(embed=embed, view=view)
-                else:
-                    await chann.send(embed=embed, view=view)
-            else:
-                if ctx is not None:
-                    await ctx.send(embed=embed, view=view)
-                else:
-                    await chann.send(embed=embed, view=view)
-        if music_artist is None or music_artist == "Inconnu":
-            music_artist = get_artist_from_title(title=video.title).artists[0]
-        file_name = str(file_name).split(".")[0]
-        await music_list_handler.add_music_to_list([str(file_name), int(duration), int(userid), str(music_artist)])
-        return True
-    except Exception as e:
-        LogErrorInWebhook()
-
 class QueueBtnV2(discord.ui.View): # Queue List Buttons
     try:
         def __init__(self, messages: list, page_count, ctx: discord.Interaction):
@@ -886,12 +936,15 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
             self.add_item(self.prev_song_btn)
             self.prev_song_btn.callback = lambda interaction=self.ctx, button=self.prev_song_btn: self.on_button_click(interaction, button)
 
-            self.sb_btn = discord.ui.Button(label="SoundBoard", style=discord.ButtonStyle.green, emoji="🔊", custom_id="sb", row=0)
+            if player.autoplay.name == "enabled":
+                self.sb_btn = discord.ui.Button(label="AutoPlay On", style=discord.ButtonStyle.green, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
+            else:
+                self.sb_btn = discord.ui.Button(label="AutoPlay Off", style=discord.ButtonStyle.red, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
             self.add_item(self.sb_btn)
             self.sb_btn.callback = lambda interaction=self.ctx, button=self.sb_btn: self.on_button_click(interaction, button)
 
             # Skip BTN
-            if (len(player.queue) > 0):
+            if (len(player.queue) > 0) or (self.player.autoplay.name == "enabled"):
                 self.skip_btn = discord.ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0)
             else:
                 self.skip_btn = discord.ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0, disabled=True)
@@ -943,10 +996,16 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                 if track is not None:
                     if self.player.guild.id in self.bot.server_music_session:
                         self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
-                    mu = track.extras._name
-                    embed = create_embed(title="Musique", description=f"La musique `{mu}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
+                    data = dict(track.extras)
+                    try:
+                        embed = create_embed(title="Musique", description=f"La musique `{data['name']}` (**{data['pos']}**) a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
+                    except KeyError: # this is from autoplay
+                        embed = create_embed(title="Musique", description=f"La musique `{track.title}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
                     await interaction.followup.send(embed=embed)
-                    return await storeSkippedSong(pool=self.bot.pool, songname=mu, userid=str(interaction.user.id))
+                    try:
+                        return await storeSkippedSong(pool=self.bot.pool, songname=data['name'], userid=str(interaction.user.id))
+                    except KeyError:
+                        return await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
             elif button.custom_id == "disconnect":
                 await self.player.disconnect()
                 self.player.queue.clear()
@@ -965,25 +1024,31 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                 if self.player.guild.id in self.bot.server_music_session:
                     self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
             elif button.custom_id == "like":
-                current = self.player.current.extras._name
-                if current:
-                    async with self.bot.pool.acquire() as conn:
-                        async with conn.transaction():
-                            result = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(interaction.user.id),))
-                            if result:
-                                # check if the song is already liked
-                                for song in result:
-                                    if song[2] == current:
-                                        embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.", suggestions=["mlist","play", "search"])
-                                        return await interaction.followup.send(embed=embed)
-                            await conn.execute("INSERT INTO LikedSongs (userId, songName) VALUES (?, ?)", (str(interaction.user.id), current))
-                            embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{current}` a été ajoutée à tes musiques likées.", suggestions=["mlist","play", "search"])
+                songData = VideoDB.from_row(self.player.current.extras)
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        result = await conn.fetchall("SELECT * FROM LikedSongsV2 WHERE userId = ?", (str(interaction.user.id),))
+                        if result:
+                            # check if the song is already liked
+                            for song in result:
+                                if song[2] == songData.video_id:
+                                    embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.", suggestions=["mlist","play", "search"])
+                                    return await interaction.followup.send(embed=embed)
+                        await conn.execute("INSERT INTO LikedSongsV2 (userId, songId, songName) VALUES (?, ?, ?)", (int(interaction.user.id), str(songData.video_id), str(songData.name)))
+                        embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{songData.name}` a été ajoutée à tes musiques likées.", suggestions=["mlist","play", "search"])
                     return await interaction.followup.send(embed=embed)
             elif button.custom_id == "prev":
                 pass
-            elif button.custom_id == "sb":
-                pass
-                # return await handle_sb(ctx=interaction, bot=self.bot, music_controler=self.music_controler, userId=interaction.user.id)
+            elif button.custom_id == "autoplay":
+                if self.player.autoplay.name == "enabled":
+                    self.player.autoplay = AutoPlayMode.disabled
+                    self.sb_btn.label = "AutoPlay Off"
+                    self.sb_btn.style = discord.ButtonStyle.red
+                else:
+                    self.player.autoplay = AutoPlayMode.enabled
+                    self.sb_btn.label = "AutoPlay On"
+                    self.sb_btn.style = discord.ButtonStyle.green
+            return
         async def on_timeout(self):
             try: return await self.ctx.edit_original_response(view=None)
             except: pass
@@ -1035,34 +1100,47 @@ class DropDownMlist(discord.ui.Select): # Youtube Select
 
 class DropDown(discord.ui.Select):
     try:
-        def __init__(self, options, ctx, bot, music_list_handler: MusicList_Handler, music_session: dict):
+        def __init__(self, options, pool: Pool, session: ClientSession, play_after: bool, bot: commands.Bot, ctx: commands.Context):
             super().__init__(placeholder='Choisis une des musiques 🦈', options=options, max_values=1, min_values=1)
-            self.ctx = ctx
+            self.session = session
+            self.pool = pool
+            self.play_after = play_after
             self.bot = bot
-            self.music_list_handler = music_list_handler
-            self.music_session=music_session
+            self.ctx = ctx
         async def callback(self, interaction: discord.Interaction):
+            try: await interaction.response.defer()
+            except: pass
             val = self.values[0]
-            url = getVideoId(val)
-            userid = interaction.user.id
-            channel = interaction.channel_id
-            serverid = interaction.guild_id
-            user = interaction.user
-            await interaction.response.send_message(f"La musique {val} est en cours de téléchargement ! 🦈")
-            user = str(user).split("#")[0]
-            if await download_from_url(url=url, user=user, channel_id=channel, userid=userid, serverid=serverid,cmd="search", ctx=self.ctx, bot=self.bot, music_list_handler=self.music_list_handler,music_session=self.music_session) == True:
-                return
-            else:
-                return await interaction.channel.send("Erreur lors du téléchargement ! 🦈")
-                
+            video_id = getVideoId(val)
+            zic_chann = discord.utils.get(interaction.guild.channels, name="musique", type=discord.ChannelType.text)
+            response = await interaction.channel.send(embed=create_embed("Musique", f"La musique {val} est en cours de téléchargement ! 🦈"))
+            video = await download(pool=self.pool, session=self.session, video_id=video_id, downloader=interaction.user.id)
+            if self.play_after:
+                if self.ctx.author.voice is None:
+                    embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
+                    return await interaction.channel.send(embed=embed)
+                try:
+                    vc: wavelink.Player = (self.ctx.voice_client or await self.ctx.author.voice.channel.connect(cls=wavelink.Player))
+                    _track = await wavelink.Playable.search(f"https://youtube.com/watch?v={video_id}")
+                    if len(_track) > 0:
+                        _r = video.to_dict()
+                        _r['txt_channel_id'] = zic_chann.id
+                        _track[0].extras = _r
+                        await vc.queue.put_wait([_track[0]])
+                        if not vc.playing:
+                            await vc.play(vc.queue.get(), volume=100)
+                        embed = create_embed(title="Musique", description=f"La musique `{video.name}` (N°{video.pos}) a été ajoutée à la queue par <@{interaction.user.id}> ! 🦈", suggestions=["queue","mlist","playlist-play"])
+                        return await response.edit(embed=embed)
+                except Exception as e:
+                    LogErrorInWebhook()
+            return await response.edit(embed=create_embed("Musique",f"La musique `{video.name}` (N°{video.pos}) a été téléchargée avec succès ! 🦈"))
     except Exception as e:
         LogErrorInWebhook()
 
 class DropDownView(discord.ui.View):
     try:
-        def __init__(self, ctx):
+        def __init__(self):
             super().__init__()
-            self.ctx = ctx
     except Exception as e:
         LogErrorInWebhook()
 
@@ -1366,6 +1444,65 @@ async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: 
     except Exception as e:
         LogErrorInWebhook()
 
+async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session: ClientSession, ctx: commands.Context) -> VideoDB:
+    """Handle user input to return video id."""
+    if from_web.isdigit():
+        print("index")
+        async with pool.acquire() as conn:
+            data = await conn.fetchone("SELECT * FROM musiquesV3 WHERE pos = ?", (int(from_web),))
+        if data is None:
+            print("No data found")
+            return
+        video = VideoDB.from_row(data)
+        from_web = video.video_id
+    elif "http" in from_web: # youtube url try to get video id
+        print("url")
+        if 'youtu.be' in from_web:
+            from_web = from_web.split("youtu.be/")[1]
+        elif "v=" in from_web:
+            from_web = from_web.split("v=")[1].split("&")[0]
+        video = await download(pool=pool, session=session, video_id=from_web, downloader=downloader)
+    elif (len(from_web) == 11) and (not " " in from_web): # seems like an id
+        print("video_id")
+        video = await download(pool=pool, session=session, video_id=from_web, downloader=downloader)
+    else: # search for the video
+        print("searching for", from_web)
+        string = from_web.strip()
+        results = YoutubeSearch(string, max_results=15).to_dict()
+        global videos
+        videos = {}
+        try:
+            unique_titles = set()
+            index = 0
+            for result in results:
+                if index == 5:
+                    break
+                title, channel, id, durr = result["title"], result["channel"], result["id"], result["duration"]
+                if title not in unique_titles:  # Check if the title is already present
+                    unique_titles.add(title)
+                    videos[f"video{index}"] = [title, channel, id, durr]
+                    index += 1
+                else:
+                    print("SAME VALUE !!!!")
+            descriptions = [
+                f"Chaine: {videos[f'video{i}'][1]} | Durée: {videos[f'video{i}'][3]}"
+                for i in range(5)
+            ]
+            options = [
+                discord.SelectOption(label=videos[f'video{i}'][0], description=descriptions[i])
+                for i in range(5)
+            ]
+            drop_down = DropDown(options=options, pool=pool, session=session, play_after=True, ctx=ctx, bot=ctx.bot)
+            view = DropDownView()
+            view.add_item(drop_down)
+            return view
+        except Exception as e:
+            LogErrorInWebhook()
+    return video
+    #     _track: wavelink.Search = await wavelink.Playable.search(f"{from_web}")
+    #     video = await download(pool=pool, session=session, video_id=_track[0].identifier, downloader=downloader)
+    # return video
+
 playlist_data = []
 playlist_names = get_all_playlists_names()
 
@@ -1417,48 +1554,20 @@ class Music(commands.Cog):
     async def play1(self, ctx: commands.Context): pass
 
     @play1.command() # old: /play
-    @app_commands.describe(index="Le/les numéro(s): 1 | 1,2,3 | 1-10")
-    @app_commands.describe(musique_name="Chercher la musique par texte (sans espace).")
-    async def music(self, ctx: commands.Context, index:str=None, musique_name:str=None):
+    @app_commands.describe(from_web="Exemple: du texte | url youtube | index de la mlist.")
+    @app_commands.describe(from_mlist="Chercher la musique dans la Mlist par son titre.")
+    async def music(self, ctx: commands.Context, *,from_web:str=None, from_mlist:str=None):
         """Joue une ou plusieurs musique(s)."""
-        try:
-            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            _musiques = await self.handler_music_input(index=index, musique_name=musique_name, channel_name=ctx.channel.name, author_id=ctx.author.id, author_voice=ctx.author.voice)
-            if isinstance(_musiques, discord.Embed):
-                return await ctx.send(embed=_musiques)
-            elif isinstance(_musiques, list):
-                vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
-                tracks = []
-                zic_chann = discord.utils.get(ctx.guild.channels, name="musique", type=discord.ChannelType.text)
-                for track in _musiques:
-                    _track: wavelink.Search = await wavelink.Playable.search(f"{MUSICS_FOLDER}{track}.mp3", source=None)
-                    index, downloader = await self.music_list_handler.get_index_by_music_name(track)
-                    duration = await self.music_list_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": track, "_duration": duration, "_txt_chann": zic_chann.id}
-                    tracks.append(_track[0])
-                await vc.queue.put_wait(tracks)
-                try:
-                    if not vc.playing:
-                        await vc.play(vc.queue.get(), volume=100)
-                except Exception as e:
-                    print(e)
-                try:
-                    await ctx.message.add_reaction("\u2705")
-                except discord.errors.NotFound:
-                    pass
-                embed = create_embed(title="Musique", description = f"{'La musique' if len(_musiques) == 1 else 'Les musiques'} `{', '.join(_musiques)}` {'est' if len(_musiques) == 1 else 'sont'} ajoutée{'s' if len(_musiques)>1 else ''} à la queue.", suggestions=["queue","mlist","playlist-play"])
-                return await ctx.send(embed=embed)
-        except Exception as e:
-            LogErrorInWebhook()
+        return await handle_play(ctx=ctx, _type="music", from_web=from_web, from_mlist=from_mlist)
 
-    @music.autocomplete("musique_name")
-    async def autocomplete_musique_name(self,ctx: discord.Interaction, musique_name: str):
+    @music.autocomplete("from_mlist")
+    async def autocomplete_musique_name(self, ctx: discord.Interaction, musique_name: str):
         try:
             liste = []
             d = await self.music_list_handler.get_all_music_name()
             for key, val in d.items():
-                if musique_name.lower() in key.lower():
-                    liste.append(app_commands.Choice(name=f"{key} ({val})", value=str(val)))
+                if musique_name.lower() in f"{val[1].lower()} ({val[0]})":
+                    liste.append(app_commands.Choice(name=f"{val[1]} ({val[0]})", value=str(key)))
                 if len(liste) == 25:
                     break
             return liste
@@ -1479,140 +1588,66 @@ class Music(commands.Cog):
             embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
             return await ctx.send(embed=embed)
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(user.id),))
+            data = await conn.fetchall("SELECT * FROM LikedSongsV2 WHERE userId = ?", (str(user.id),))
         if len(data) == 0:
             embed = create_embed(title="Erreur", description=f"<@{user.id}> n'a pas de musiques likés.")
             return await ctx.send(embed=embed, ephemeral=True)
         else:
+            vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
             zic_chann = discord.utils.get(ctx.guild.channels, name="musique", type=discord.ChannelType.text)
             music_list = []
-            for track in data:
-                _, __, songName = track
-                _track: wavelink.Search = await wavelink.Playable.search(f"{MUSICS_FOLDER}{songName}.mp3", source=None)
+            random.shuffle(data)
+            for _i, track in enumerate(data):
+                _id, userId, videoId, videoName = track
+                video = await get_Video_from_input(videoId, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
+                _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={videoId}")
                 if len(_track) > 0:
-                    index, downloader = await self.music_list_handler.get_index_by_music_name(songName)
-                    duration = await self.music_list_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": songName, "_duration": duration, "_txt_chann": zic_chann.id}
-                    music_list.append(_track[0])
-        random.shuffle(music_list)
-        vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
-        added = await vc.queue.put_wait(music_list)
-        try:
-            if not vc.playing:
-                await vc.play(vc.queue.get(), volume=100)
-        except Exception as e:
-            print(e)
+                    _r = video.to_dict()
+                    _r['txt_channel_id'] = ctx.channel.id
+                    _track[0].extras = _r
+                    await vc.queue.put_wait([_track[0]])
+                if _i == 0 and not vc.playing:
+                    await vc.play(vc.queue.get(), volume=100)
         try:
             await ctx.message.add_reaction("\u2705")
         except discord.errors.NotFound:
             pass
-        embed = create_embed(title="Musique", description=f"Les titres likés de <@{user.id}> ({added} musiques) ont été ajoutés à la queue.")
+        embed = create_embed(title="Musique", description=f"Les titres likés de <@{user.id}> ({len(data)} musiques) ont été ajoutés à la queue.")
         return await ctx.send(embed=embed)
 
     @play1.command(name='next') #old: /play-next
-    @app_commands.describe(index="Le/les numéro(s): 1 | 1,2,3 | 1-10")
-    @app_commands.describe(musique_name="Chercher la musique par texte (sans espace).")
-    async def play_next(self, ctx: commands.Context, index:str=None, musique_name:str=None):
+    @app_commands.describe(from_web="Exemple: du texte | url youtube | index de la mlist.")
+    @app_commands.describe(from_mlist="Chercher la musique dans la Mlist par son titre.")
+    async def play_next(self, ctx: commands.Context, *,from_web:str=None, from_mlist:str=None):
         """Play-next une musique"""
-        try:
-            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            _musiques = await self.handler_music_input(index=index, musique_name=musique_name, channel_name=ctx.channel.name, author_id=ctx.author.id, author_voice=ctx.author.voice)
-            if isinstance(_musiques, discord.Embed):
-                return await ctx.send(embed=_musiques)
-            elif isinstance(_musiques, list):
-                vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
-                zic_chann = discord.utils.get(ctx.guild.channels, name="musique", type=discord.ChannelType.text)
-                for track in _musiques:
-                    _track: wavelink.Search = await wavelink.Playable.search(f"{MUSICS_FOLDER}{track}.mp3", source=None)
-                    index, downloader = await self.music_list_handler.get_index_by_music_name(track)
-                    duration = await self.music_list_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": track, "_duration": duration, "_txt_chann": zic_chann.id}
-                    if len(_track) > 0:
-                        print('Adding:', _track[0].extras._name, _track,_track[0])
-                        print(vc.queue)
-                        vc.queue.put_at(0, _track[0])
-                        print('Added:', _track[0].extras._name)
+        return await handle_play(ctx=ctx, _type="next", from_web=from_web, from_mlist=from_mlist)
 
-                try:    
-                    if not vc.playing:
-                        await vc.play(vc.queue.get(), volume=100)
-                except Exception as e:
-                    print(e)
-                try:
-                    await ctx.message.add_reaction("\u2705")
-                except discord.errors.NotFound:
-                    pass
-                embed = create_embed(title="Musique", description = f"{'La musique' if len(_musiques) == 1 else 'Les musiques'} `{', '.join(_musiques)}` {'est' if len(_musiques) == 1 else 'sont'} ajoutée{'s' if len(_musiques)>1 else ''} en haut de la queue.", suggestions=["queue","mlist","playlist-play"])
-                return await ctx.send(embed=embed)
-        except Exception as e:
-            LogErrorInWebhook()
-
-    @play_next.autocomplete("musique_name")
+    @play_next.autocomplete("from_mlist")
     async def autocomplete_musique_name(self, ctx: discord.Interaction, musique_name: str):
         try:
             liste = []
             d = await self.music_list_handler.get_all_music_name()
             for key, val in d.items():
-                if musique_name.lower() in key.lower():
-                    liste.append(app_commands.Choice(name=f"{key} ({val})", value=str(val)))
+                if musique_name.lower() in f"{val[1].lower()} ({val[0]})":
+                    liste.append(app_commands.Choice(name=f"{val[1]} ({val[0]})", value=str(key)))
                 if len(liste) == 25:
                     break
             return liste
         except Exception as e:
             LogErrorInWebhook()
-    
-    @play1.command(name="all") #old: /play-all
-    @app_commands.describe(more_options="Inclure ou exclure des utilisateurs & changer l'ordre des musiques")
-    @app_commands.choices(more_options=[
-        discord.app_commands.Choice(name="Afficher plus d'options", value="True")
-        ])
-    async def play_all(self, ctx: commands.Context, more_options: discord.app_commands.Choice[str]=None):
-        """Jouer toutes les musiques, selon vos paramètres."""
-        try:
-            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            if ctx.channel.name != "musique":
-                embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
-                return await ctx.send(embed=embed, ephemeral=True)
-            out = []
-            vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
-            try:
-                await ctx.message.add_reaction("\u2705")
-            except discord.errors.NotFound:
-                pass
-            async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall("SELECT name FROM musiques")
-                for d in data:
-                    out.append(d[0])
-            zic_chann = discord.utils.get(ctx.guild.channels, name="musique", type=discord.ChannelType.text)
-            tracks = []
-            for track in out:
-                _track: wavelink.Search = await wavelink.Playable.search(f"{MUSICS_FOLDER}{track}.mp3", source=None)
-                if len(_track) > 0:
-                    index, downloader = await self.music_list_handler.get_index_by_music_name(track)
-                    duration = await self.music_list_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": track, "_duration": duration, "_txt_chann": zic_chann.id}
-                    tracks.append(_track[0])
-            random.shuffle(tracks)
-            await vc.queue.put_wait(tracks)
-            try:
-                if not vc.playing:
-                    await vc.play(vc.queue.get(), volume=100)
-            except Exception as e:
-                print(e)
 
-            embed = create_embed(title="Musique", description=f"Toutes les musiques (**{len(tracks)}**) ont été ajoutées à la queue en mode aléatoire par <@{ctx.author.id}> !")
-            try:
-                return await ctx.send(embed=embed)
-            except discord.errors.NotFound:
-                return await ctx.channel.send(embed=embed)
-        except Exception as e:
-            print(e)
-            LogErrorInWebhook()
+    @play1.command(name="random")
+    async def play_random(self, ctx: commands.Context, nombre: int=10):
+        """Jouer un nombre de musique dans la Mlist aléatoire."""
+        return await handle_play(ctx=ctx, _type="random", random_nb=nombre)
+
 # END PLAY GROUP
 
     @commands.hybrid_command() #old: /mlist
     async def mlist(self, ctx: commands.Context):
         """Affiche la liste de toutes les musiques."""
+        if ctx.channel.name != "musique":
+            return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
         if not isinstance(ctx, CustomContext):
             try: await ctx.interaction.response.defer()
             except: print("error defer")
@@ -1644,78 +1679,49 @@ class Music(commands.Cog):
         try:
             await command_counter(user_id=str(interaction.author.id), bot=self.bot)
             if interaction.channel.name != "musique":
-                return await interaction.send("Merci d'utiliser le channel <#896275056089530380> **BUICON**", ephemeral=True)
+                return await interaction.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
             if is_url(keysearch):
-                url = keysearch
-                if '?list=' in url:
-                    new_url = url.split("?list=")[0]
-                    embed = create_embed(title="Musique", description=f"L'url : `{url}` proviens d'une playlist !\n\nL'url est remplacée par : `{new_url}`.\n\nLe téléchargement est en cours...")
-                    await interaction.send(embed=embed)
-                    url = new_url
-                else:
-                    embed = create_embed(title="Musique", description=f"Téléchargement en cours...")
-                    await interaction.send(embed=embed)
-                user = interaction.author
-                userid = interaction.author.id
-                user = str(user).split("#")[0]
-                cmd = "DL"
-                if await download_from_url(url=url, 
-                    user=user, 
-                    channel_id=interaction.channel.id,
-                    userid=userid, 
-                    serverid=interaction.guild.id, 
-                    cmd=cmd, 
-                    ctx=interaction, 
-                    bot=self.bot, 
-                    music_list_handler=self.music_list_handler,
-                    music_session=self.music_session,
-                ) == True:
-                    pass
-                return
+                if 'youtu.be' in keysearch:
+                    video_id = keysearch.split("youtu.be/")[1]
+                elif "v=" in keysearch:
+                    video_id = keysearch.split("v=")[1].split("&")[0]
+                else: 
+                    video_id = keysearch
+                video = await download(pool=self.bot.pool, session=self.bot.session, video_id=video_id, downloader=interaction.author.id)
+                return await interaction.send(f"La musique `{video.name}` (N°{video.pos}) a été ajoutée à la queue !")
             else:
                 string = keysearch.strip()
                 results = YoutubeSearch(string, max_results=15).to_dict()
-                index = 0
                 global videos
                 videos = {}
                 try:
+                    unique_titles = set()
+                    index = 0
                     for result in results:
                         if index == 5:
                             break
                         title, channel, id, durr = result["title"], result["channel"], result["id"], result["duration"]
-                        if title not in [v[0] for v in videos.values()]: # Check if the title is already present in the dictionary
-                            videos["video" + str(index)] = []
-                            videos["video" + str(index)].append(title)
-                            videos["video" + str(index)].append(channel)
-                            videos["video" + str(index)].append(id)
-                            videos["video" + str(index)].append(durr)
+                        if title not in unique_titles:  # Check if the title is already present
+                            unique_titles.add(title)
+                            videos[f"video{index}"] = [title, channel, id, durr]
                             index += 1
                         else:
                             print("SAME VALUE !!!!")
-
-                    desc1 = "Chaine:" + str(videos['video0'][1]) + " | Durée: " +  str(videos['video0'][3])
-                    desc2 = "Chaine:" + str(videos['video1'][1]) + " | Durée: " +  str(videos['video1'][3])
-                    desc3 = "Chaine:" + str(videos['video2'][1]) + " | Durée: " +  str(videos['video2'][3])
-                    desc4 = "Chaine:" + str(videos['video3'][1]) + " | Durée: " +  str(videos['video3'][3])
-                    desc5 = "Chaine:" + str(videos['video4'][1]) + " | Durée: " +  str(videos['video4'][3])
-                except Exception as e:
-                    print(e)
-                    return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer. {e}", ephemeral=True)
-                options = [
-                    discord.SelectOption(label=videos['video0'][0], description=desc1),
-                    discord.SelectOption(label=videos['video1'][0], description=desc2),
-                    discord.SelectOption(label=videos['video2'][0], description=desc3),
-                    discord.SelectOption(label=videos['video3'][0], description=desc4),
-                    discord.SelectOption(label=videos['video4'][0], description=desc5)
-                ]
-                drop_down = DropDown(options=options, ctx=interaction, bot=self.bot, music_list_handler=self.music_list_handler, music_session=self.music_session)
-                view = DropDownView(ctx=interaction)
-                view.add_item(drop_down)
-
-                try:
+                    descriptions = [
+                        f"Chaine: {videos[f'video{i}'][1]} | Durée: {videos[f'video{i}'][3]}"
+                        for i in range(5)
+                    ]
+                    options = [
+                        discord.SelectOption(label=videos[f'video{i}'][0], description=descriptions[i])
+                        for i in range(5)
+                    ]
+                    drop_down = DropDown(options=options, pool=self.bot.pool, session=self.bot.session, play_after=False, ctx=interaction, bot=self.bot)
+                    view = DropDownView(ctx=interaction)
+                    view.add_item(drop_down)
                     await interaction.send(f"Résultat de la recherche `{string}`:", view=view)
                 except Exception as e:
-                    return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer.", ephemeral=True)
+                    print(e)
+                    await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer. {e}", ephemeral=True)
         except Exception as e:
             LogErrorInWebhook()
 
@@ -1727,23 +1733,28 @@ class Music(commands.Cog):
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
             if ctx.channel.name != "musique":
-                embed = create_embed(title="Erreur", description="Merci d'utiliser le channel <#896275056089530380> **BUICON**")
-                return await ctx.send(embed=embed, ephemeral=True)
+                return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
             if position is not None and (position < 1 or position > 5):
                 return await ctx.send(embed=create_embed(title="Erreur", description="La position doit être entre 1 et 5."))
             player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
             if not player:
                 return
-            if position is None:
-                cur_track = f"`{player.current.extras._name}` (**{player.current.extras._index}**) a été passé par "
-                await player.skip(force=True)
+            current_data = dict(player.current.extras)
+            if current_data:
+                if position is None:
+                    cur_track = f"`{current_data['name']}` (**{current_data['pos']}**) a été passé par "
+                    name = current_data['name']
+                    await player.skip(force=True)
+                else:
+                    next_track = player.queue.get_at(position - 1)
+                    next_track_data = dict(next_track.extras)
+                    name = next_track_data['name']
+                    cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
             else:
-                _cur_track = player.queue.get_at(position - 1)
-                cur_track = f"`{_cur_track.extras._name}` (**{_cur_track.extras._index}**) a été retiré de la queue par "
+                return await player.skip(force=True)
+            await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
             if ctx.guild.id in self.bot.server_music_session:
                 self.bot.server_music_session[ctx.guild.id]['nb'] +=  1
-            if ctx.guild.id in self.bot.musics_ui_status:
-                self.bot.musics_ui_status[ctx.guild.id] = False
             try:
                 self.bot.locks[ctx.guild.id].release()
             except RuntimeError:
@@ -1795,31 +1806,36 @@ class Music(commands.Cog):
     async def remove(self, ctx: commands.Context, index: int=None, musique_name:str=None):
         """Enlever une musique de la liste."""
         try:
-            if music_name is not None:
-                index = musique_name
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            playlist_indexs = await self.music_list_handler.get_all_index_in_playlists()
-            if str(index) in playlist_indexs:
-                # La musique existe dans une playlist.
-                embed = create_embed(title="Suppression", description=f"<@{ctx.author.id}>\n- La musique {index} est présente dans une playlist !\n\n- Merci de l'enlever avec </playlist-modify:1115881059352068176> avant.")
+            video_id = None
+            if musique_name is not None:
+                video_id = musique_name
+            elif index is not None:
+                async with self.bot.pool.acquire() as conn:
+                    data = await conn.fetchone("SELECT video_id, name FROM musiquesV3 WHERE pos = ?", (index,))
+                if data is None:
+                    return await ctx.send("Aucune musique ne correspond à cet index.")
+                video_id = data[0]
+            if video_id is not None:
+                for _type in ["thumb", "channel_avatar"]:
+                    try:
+                        os.remove(f"{MLIST_FOLDER}/{video_id}_{_type}.jpg")
+                    except FileNotFoundError:
+                        pass
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute("DELETE FROM musiquesV3 WHERE video_id = ?", (video_id,))
+                # re index each pos
+                async with self.bot.pool.acquire() as conn:
+                    data = await conn.fetchall("SELECT pos FROM musiquesV3 ORDER BY pos")
+                for i, d in enumerate(data):
+                    await conn.execute("UPDATE musiquesV3 SET pos = ? WHERE pos = ?", (i+1, d[0]))
+                try:
+                    await ctx.message.add_reaction("\u2705")
+                except discord.errors.NotFound:
+                    pass
+                embed = create_embed(title="Suppression", description=f"[Musique supprimée !](https://www.youtube.com/watch?v={video_id})", suggestions=["queue","mlist","playlist-play"])
                 return await ctx.send(embed=embed)
-            music_name = await self.music_list_handler.getName(str(index))
-            if music_name == "Unknown index.":
-                next_index = await self.music_list_handler.get_next_index()
-                embed = create_embed(title="Suppression", description=f"<@{ctx.author.id}>\n- La musique {index} semble ne pas exister !\n\n- **L'index maximal actuel dans la mlist est {next_index - 1}**.")
-                return await ctx.send(embed=embed)
-            path = MUSICS_FOLDER + music_name + ".mp3"
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-            try:
-                await ctx.message.add_reaction("\u2705")
-            except discord.errors.NotFound:
-                pass
-            await self.music_list_handler.remove_from_music_list(str(index))
-            embed = create_embed(title="Suppression", description=f"Musique `{music_name}` supprimée !", suggestions=["queue","mlist","playlist-play"])
-            return await ctx.send(embed=embed)
         except Exception as e:
             LogErrorInWebhook()
 
@@ -1829,14 +1845,13 @@ class Music(commands.Cog):
             liste = []
             d = await self.music_list_handler.get_all_music_name()
             for key, val in d.items():
-                if musique_name.lower() in key.lower():
-                    liste.append(app_commands.Choice(name=f"{key} ({val})", value=str(val)))
+                if musique_name.lower() in f"{val[1].lower()} ({val[0]})":
+                    liste.append(app_commands.Choice(name=f"{val[1]} ({val[0]})", value=str(key)))
                 if len(liste) == 25:
                     break
             return liste
         except Exception as e:
             LogErrorInWebhook()
-
 #End music controler
     
     @commands.hybrid_command(name='is-song', aliases=["find"]) #old: /is-song
@@ -2316,7 +2331,7 @@ class Music(commands.Cog):
                     print(e)
                     return await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer. {e}", ephemeral=True)
                 options = [discord.SelectOption(label=videos[f'video{i}'][0], description=descs[i]) for i in range(0, len(videos))]
-                drop_down = SoundBoardDropDown(options=options, ctx=interaction, bot=self.bot, soundboard_manager=SoundBoardManage(pool=self.bot.pool))
+                drop_down = SoundBoardDropDown(options=options,ctx=interaction, bot=self.bot, soundboard_manager=SoundBoardManage(pool=self.bot.pool))
                 view = DropDownView(ctx=interaction)
                 view.add_item(drop_down)
                 try:
@@ -2358,6 +2373,67 @@ class Music(commands.Cog):
             LogErrorInWebhook()
     # End SoundBoard group
 
+    @commands.hybrid_command(name="fix-thumb", aliases=["ft"])
+    @app_commands.describe(musique_name="Le nom de la musique à recharcher la miniature.")
+    async def fixThumb(self, ctx: commands.Context, musique_name: str=None):
+        """Recharger la miniature d'une musique."""
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=ctx.bot)
+            if musique_name is not None:
+                video_id = musique_name
+            else:
+                vc: wavelink.Player = ctx.voice_client
+                if vc is None:
+                    return await ctx.send("Trapard n'est pas dans le vocal.", ephemeral=True)
+                if vc.current is None:
+                    return await ctx.send("Trapard n'a pas de musique en cours.", ephemeral=True)
+                data = dict(vc.current.extras)
+                video_id = data["_downloader"]
+            thumb = await get_thumb(session=self.bot.session, video_id=video_id)
+            embed = create_embed(title="Fix-thumb", description=f"La miniature de la musique `{video_id}` a bien été rechargée.")
+            return await ctx.send(embed=embed)
+        except Exception as e:
+            LogErrorInWebhook()
+
+    @fixThumb.autocomplete("musique_name")
+    async def autocomplete_musique_name(self, ctx: discord.Interaction, musique_name: str):
+        try:
+            liste = []
+            d = await self.music_list_handler.get_all_music_name()
+            for key, val in d.items():
+                if musique_name.lower() in f"{val[1].lower()} ({val[0]})":
+                    liste.append(app_commands.Choice(name=f"{val[1]} ({val[0]})", value=str(key)))
+                if len(liste) == 25:
+                    break
+            return liste
+        except Exception as e:
+            LogErrorInWebhook()
+
+    @commands.command(aliases=["vol"])
+    async def volume(self, ctx: commands.Context, value: int) -> None:
+        """Change the volume of the player."""
+        player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+        if value > 300 and ctx.author.id != 311013099719360512:
+            return await ctx.send(embed=create_embed(title="Volume", description="Le volume ne peut pas être supérieur à 300."))
+        if not player:
+            return
+        await player.set_volume(value)
+        await ctx.message.add_reaction("\u2705")
+    
+    @commands.hybrid_command(name="autoplay", aliases=["ap"])
+    async def autoplay(self, ctx: commands.Context, value: bool) -> None:
+        """Change the autoplay of the player."""
+        player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+        if not player:
+            return
+        if value:
+            await ctx.send(embed=create_embed(title="Autoplay", description="L'autoplay a été activé."))
+            player.autoplay = AutoPlayMode.enabled
+        else:
+            await ctx.send(embed=create_embed(title="Autoplay", description="L'autoplay a été désactivé."))
+            player.autoplay = AutoPlayMode.disabled
+        await ctx.message.add_reaction("\u2705")
+
 async def handle_sb(ctx: commands.Context, bot, userId: int=None):
     """Affiche les sons de la soundboard."""
     try:
@@ -2391,6 +2467,72 @@ async def handle_sb(ctx: commands.Context, bot, userId: int=None):
         else: 
             return await ctx.send(embed=embed, view=view, ephemeral=True)
     except: LogErrorInWebhook()
+
+async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'all'], from_web:str=None, from_mlist:str=None, random_nb:int=None):
+    try:
+        await command_counter(user_id=str(ctx.author.id), bot=ctx.bot)
+        if ctx.channel.name != "musique":
+            return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
+        vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+        try: await ctx.message.add_reaction("\u2705")
+        except discord.errors.NotFound: pass
+        if (_type == "next") or (_type == "music"):
+            if from_mlist is not None:
+                from_web = from_mlist
+            vc.autoplay = wavelink.AutoPlayMode.enabled
+            video = await get_Video_from_input(from_web, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
+            if isinstance(video, discord.ui.View):
+                return await ctx.send(embed=create_embed(title="Musique", description="Choisis une musique dans la liste.", suggestions=["play","play-next","mlist"]), view=video)
+            LogErrorInWebhook(f"Searching for `https://www.youtube.com/watch?v={video.video_id}`")
+            _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
+            if len(_track) > 0:
+                try:
+                    _r = video.to_dict()
+                    _r['txt_channel_id'] = ctx.channel.id
+                    _track[0].extras = _r
+                    if _type == "next":
+                        vc.queue.put_at(0, _track[0])
+                    else:
+                        await vc.queue.put_wait([_track[0]])
+                except Exception as e:
+                    print(e)
+            if not vc.playing:
+                await vc.play(vc.queue.get(), volume=100)
+        elif _type == "random":
+            if random_nb > 50:
+                return await ctx.reply(embed=create_embed(title="Erreur", description="Le nombre de musiques aléatoires ne peut pas être supérieur à 50."))
+            async with ctx.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT * FROM musiquesV3")
+            tracks = []
+            random.shuffle(data)
+            for i, track in enumerate(data):
+                if i == random_nb:
+                    break
+                video = VideoDB.from_row(track)
+                try:
+                    _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
+                    if len(_track) > 0:
+                        _r = video.to_dict()
+                        _r['txt_channel_id'] = ctx.channel.id
+                        _track[0].extras = _r
+                        await vc.queue.put_wait([_track[0]])
+                        print(f"Added to queue {video.name}")
+                except:
+                    LogErrorInWebhook(f"Can't search {video.video_id} ({video.name}) in random")
+            if not vc.playing:
+                await vc.play(vc.queue.get(), volume=100)
+        if ctx.author.voice is None:
+            return await ctx.send(embed=create_embed(title="Erreur", description="Tu n'es pas dans un channel vocal."), ephemeral=True)
+        match _type:
+            case "next":
+                return await ctx.reply(embed=create_embed(title="Musique", description=f"La musique `{video.name}` (**{video.pos}**) été ajoutée en haut de la queue !"))
+            case "music":
+                return await ctx.reply(embed=create_embed(title="Musique", description=f"La musique `{video.name}` (**{video.pos}**) été ajoutée à la queue !"))
+            case "random":
+                return await ctx.reply(embed=create_embed(title="Musique", description=f"{random_nb} musiques aléatoires ont été ajoutées à la queue !"))
+    except Exception as e:
+        LogErrorInWebhook()
+        print(e)
 
 async def setup(bot):
     await bot.add_cog(Music(bot))

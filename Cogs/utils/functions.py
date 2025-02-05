@@ -1,17 +1,26 @@
 import discord, datetime, traceback, asyncio
 from typing import TYPE_CHECKING
 from .data import commands_id_dict, daily_claim_interest
-from .path import JSON_DATA, G_STATS, R34_FOLDER
+from .path import JSON_DATA, G_STATS, R34_FOLDER, VARS
 from PIL import Image
 import undetected_chromedriver as uc
 import json, re, inspect, os, random, asqlite, io
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
 from discord.ext import commands
 from aiohttp import ClientSession
 
 if TYPE_CHECKING:
     from ...bot import Trapard
+
+def getVar(var_name: str):
+    lines=open(VARS, "r").readlines()
+    for line in lines:
+        if var_name in line:
+            return line.split("=")[1].replace('"', "").strip()
+    return None
 
 class TrapardeurV2:
     """Gestion de la DB Trapardeur. DB Structure: `userId:str`, `vocalTime:int`, `messageSent:int`, `commandSent:int`"""
@@ -82,15 +91,15 @@ class TrapardeurV2:
 
 def LogErrorInWebhook(error=""):
     chunk1, chunk2, chunk3 = None, None, None
-    error = traceback.format_exc()
-    if len(error) >= 2000:
-        chunk1 = error[:2000]
-        chunk2 = error[2000:]
+    error_trace = traceback.format_exc()
+    if len(error_trace) >= 2000:
+        chunk1 = error_trace[:2000]
+        chunk2 = error_trace[2000:]
         if len(chunk2) >= 2000:
             chunk2 = chunk2[:2000]
             chunk3 = chunk2[2000:]
     else:
-        chunk1 = error
+        chunk1 = error_trace
     embed = discord.Embed(
         title=f'Erreur à {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
         description=f"```yaml\n{chunk1}```",
@@ -106,7 +115,7 @@ def LogErrorInWebhook(error=""):
 
 async def run_async_webhook_error(embed: discord.Embed):
     async with ClientSession() as session:
-        webhook = discord.Webhook.from_url(os.environ.get("ERROR_WEBHOOK"), session=session)
+        webhook = discord.Webhook.from_url(getVar("ERROR_WEBHOOK"), session=session)
         await webhook.send(embed=embed, username='Trapard Errors Log', avatar_url="https://files.reus.nc/images/rock_sus.png")
 
 async def command_counter(user_id: str, bot, type:str=None):
@@ -129,10 +138,10 @@ async def command_counter(user_id: str, bot, type:str=None):
             await handler.add(userId=user_id, messageSent=1, commandSent=0, vocalTime=0)
 
 def create_embed(title: str, description: str, color=discord.Color.blue(), author=None, thumbnail=None, fields: list=None, footer=None, suggestions: list=None, image = None):
-    """
+    """        
         Fields must be :
             [
-                {"name": "dataname1", "value": "datavalue1", "inline": False}
+                {"name": "Title", "value": "text", "inline": False}
             ]
     """
     embed = discord.Embed(title=title, description=description, color=color)
@@ -165,7 +174,7 @@ def create_embed(title: str, description: str, color=discord.Color.blue(), autho
     else:
         maintenant = datetime.datetime.now()
         format_date_heure = maintenant.strftime("à %H:%M le %d/%m/%y")
-        embed.set_footer(text=f"Trapard © by !Reu$ - {format_date_heure}", icon_url="http://reusteur.org/trap_icon.png")
+        embed.set_footer(text=f"Trapard © by !Reu$ - {format_date_heure}", icon_url="https://files.reus.nc/images/variable_ln7vj.png?v=2")
     return embed
 
 def convert_str_to_emojis(string):
@@ -415,7 +424,7 @@ def afficher_nombre_fr(nombre: int, decimal: int = 0):
     return nombre_formate
 
 async def lol_player_in_game(player, bot):
-    APIKEY = os.environ.get("RIOT_API")
+    APIKEY = getVar("RIOT_API")
     zigotos_ID = {
         'ReuS': ['bOYnT0LwqqtQ-0vUNtqpP0V5Cnuf688yW-_5PRpyJXi72xy_Fkpa_yTsRw', 'uppi1LvsGJDWbwJHEaZJYNeND_227qzYA_0ce9Kqipl08fNYj7eMV2-sFA'],
         'Toto': ['R5JdltxLcVtD5dAOlHrKSWostfOuGYiFcdFCJAK5KdUesE8rBRCKeS7AiA', 'fzCP-o0Opq_vBD8SbExaKp9teELAyf--5AR_196WVRx2cI7b24mBhsxJ3Q'],
@@ -525,7 +534,7 @@ def convert_txt_to_colored(text: str, color: str, background: str=None, bold: bo
     return format_string
 
 def format_duration(duration_in_seconds: int) -> str:
-    """Return seconds to minutes or hours or days."""
+    """Return HH:MM:SS formatted duration from seconds."""
     try:
         days = duration_in_seconds // 86400
         hours = (duration_in_seconds % 86400) // 3600
@@ -647,8 +656,8 @@ def getDriver():
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
-
-        driver = webdriver.Firefox(options=options)
+        service = Service("/usr/local/bin/geckodriver")
+        driver = webdriver.Firefox(service=service, options=options)
         return driver
     except Exception as e:
         LogErrorInWebhook()
@@ -917,7 +926,7 @@ async def getMList(bot, userid:int=None):
     """return int(song) duration by index"""
 
     async with bot.pool.acquire() as conn:
-        out = await conn.fetchall("SELECT name, duree, downloader, artiste, pos FROM musiques")
+        out = await conn.fetchall("SELECT name, duree, downloader, artiste, pos FROM musiquesV3")
 
     data = {}
     for musique in out:
@@ -1112,4 +1121,12 @@ async def get_latest_message_from_channel(channel: discord.TextChannel) -> disco
     async for message in channel.history(limit=1, oldest_first=False):
         return message
     return None
+
+async def get_next_index(pool):
+    """
+    return the next index that should be in mlist.
+    """
+    async with pool.acquire() as conn:
+        data = await conn.fetchone("SELECT pos FROM musiquesV3 ORDER BY id DESC LIMIT 1")
+    return int(data[0]) + 1
 

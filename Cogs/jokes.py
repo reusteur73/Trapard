@@ -1,12 +1,12 @@
 from discord.ext import commands
 from typing import Literal
-from .utils.functions import LogErrorInWebhook, command_counter
+from .utils.functions import LogErrorInWebhook, command_counter, getVar
 from bot import Trapard
-import aiohttp, os
+import aiohttp
 
 async def get_joke(session: aiohttp.ClientSession, wanted: Literal["joke", "dark", "beauf"]):
     try:
-        headers = {"Authorization": f"Bearer {os.environ.get('JOKE_API')}"}
+        headers = {"Authorization": f"Bearer {getVar('JOKE_API')}"}
         
         if wanted == "beauf":
             params = {"type": "beauf"}

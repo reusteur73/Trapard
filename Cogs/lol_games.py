@@ -1,24 +1,70 @@
-import discord, os, datetime, io, threading, asyncio
+import discord, os, datetime, io, traceback, asyncio, difflib
 from discord.ext import commands, tasks
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Tuple, List
 from PIL import ImageDraw, ImageFont, Image
-from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWebhook, calc_usr_gain_by_tier
+from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWebhook, calc_usr_gain_by_tier, getVar, command_counter
 from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH
 from bot import Trapard
 
-async def get_puuid_by_name(name: str,bot: Trapard, region="euw1"):
+async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
     try:
-        if region == "euw":
-            region = "euw1"
-        summoner_url = f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-name/{name}?api_key={os.environ.get('RIOT_API')}"
+        summoner_url = f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{ign}/{gameTag}?api_key={getVar('RIOT_API')}"
         async with bot.session.get(summoner_url) as summoner_response:
             summoner_data = await summoner_response.json()
-        await bot.session.close()
+        if "puuid" not in summoner_data:
+            print(summoner_data, "No puuid", ign, gameTag, summoner_url)
+            return None
         return summoner_data["puuid"]
     except Exception as e:
-        LogErrorInWebhook(error=f"[GET PUUID BY NAME] {e} NAME={name}")
+        LogErrorInWebhook(error=f"[GET PUUID BY NAME] {e} NAME={ign}, response = {summoner_data}, url = {summoner_url}")
 
         return None
+
+class Mastery:
+    async def get_all_mastery(puuid: str, region: str, bot: Trapard):
+        """
+        Get all the mastery of a user from a **puuid** and a region from the **database**
+        """
+        try:
+            APIKEY = getVar("RIOT_API")
+            if region == "euw": region += "1"
+            summoner_url = f"https://{region}.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}?api_key={APIKEY}"
+            async with bot.session.get(summoner_url) as summoner_response:
+                summoner_data = await summoner_response.json()
+            return summoner_data
+        except Exception as e:
+            LogErrorInWebhook(error=f"[GET ALL MASTERY] {e} NAME={puuid}, response = {summoner_data}, url = {summoner_url}")
+            return None
+
+    async def update_user_mastery(mastery: dict, bot: Trapard):
+        """
+            Update the mastery of a user in the **database** from a **mastery** dictionary
+        """
+        try:
+            async with bot.pool.acquire() as conn:
+                await conn.execute("UPDATE LoLGamesTracker SET champions_mastery = ? WHERE puuid = ?", str(mastery), mastery[0]["puuid"])
+        except Exception as e:
+            LogErrorInWebhook(error=f"[UPDATE USER MASTERY] {e} NAME={mastery[0]['puuid']}")
+            return None
+
+    async def get_champion_mastery(puuid: str, region: str, champion_id: int, bot: Trapard):
+        """
+        Get the mastery of a **specific champion** for a user from a **puuid** and a region from the **database**
+        """
+        try:
+            async with bot.pool.acquire() as conn:
+                data = await conn.fetchone("SELECT champions_mastery FROM LoLGamesTracker WHERE puuid = ?", puuid)
+            if not data:
+                return None
+            print(data)
+            mastery = eval(data[0])
+            for champ in mastery:
+                if champ["championId"] == champion_id:
+                    return dict(champ)
+            return None
+        except Exception as e:
+            LogErrorInWebhook(error=f"[GET CHAMPION MASTERY] {e} NAME={puuid}")
+            return None
 
 class GameLink(discord.ui.View):
     def __init__(self, link: str="N/A", embed=None):
@@ -41,7 +87,7 @@ class LolGames(commands.Cog):
     @tasks.loop(seconds=120)
     async def check_lol_games(self):
         try:
-            APIKEY = os.environ.get("RIOT_API")
+            APIKEY = getVar("RIOT_API")
             async with self.bot.pool.acquire() as conn:
                 data = await conn.fetchall("SELECT id, userId, ign, puuid, region, last_game_id FROM LoLGamesTracker")
 
@@ -370,6 +416,97 @@ class LolGames(commands.Cog):
                 img.save(f"{FILES_PATH}{mentions}-game.png")
                 return
             
+            def draw_swarm(players: List[dict], gamedata: dict):
+                def minutes_to_time(minutes: int) -> str:
+                    hours = minutes // 60
+                    mins = minutes % 60
+                    return f"{hours:02}:{mins:02}"
+
+                def draw_text(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
+                    text_width, text_height = draw.textlength(text, font=font), 24
+                    
+                    # Fixer la coordonnée x à celle de départ de la boîte pour aligner le texte à gauche
+                    x = coordinates[0]
+                    
+                    # Calculer la coordonnée y pour centrer verticalement le texte
+                    y = int(coordinates[1] + (box_size[1] - text_height) // 2)
+                    
+                    draw.text(
+                        (x, y),
+                        text,
+                        font=font,
+                        fill=fill,
+                    )
+                
+                def add_corners(im, rad):
+                    circle = Image.new('L', (rad * 2, rad * 2), 0)
+                    draw = ImageDraw.Draw(circle)
+                    draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
+                    alpha = Image.new('L', im.size, 255)
+                    w, h = im.size
+                    alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
+                    alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
+                    alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
+                    alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
+                    im.putalpha(alpha)
+                    return im
+                try:
+                    FONT = "/home/dreus/trapard/files/UbuntuNerdFont-Regular.ttf"
+                    img = Image.open(f"/home/dreus/trapard/files/swarm{len(players)}.png")
+                    draw = ImageDraw.Draw(img)
+
+                    vert_decay = 202
+
+                    # draw game info
+                    if gamedata["winned"]:
+                        draw_text(draw, "Victoire", (220, 22), (0, 40), ImageFont.truetype(FONT, 40), "green")
+                    else:
+                        draw_text(draw, "Défaite", (220, 22), (0, 40), ImageFont.truetype(FONT, 40), "red")
+
+                    draw_text(draw, f"Durée: {minutes_to_time(gamedata['duration'])}", (425, 22), (0, 40), ImageFont.truetype(FONT, 40), "white")
+
+                    draw_text(draw, f"Map: {gamedata['map']}", (725, 22), (0, 40), ImageFont.truetype(FONT, 40), "white")
+
+                    # draw players
+                    for p_i, player in enumerate(players):
+                        player["championIcon"] = player["championIcon"].convert("RGBA")
+                        player["championIcon"] = add_corners(player["championIcon"], 15)
+                        player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
+                        img.paste(player["championIcon"], (57, 125+(vert_decay*p_i)), player["championIcon"])
+
+                        draw_text(draw, player["pseudo"], (200, 122+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{player['ig_lvl']}", (23, 216+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 29), "white")
+
+                        draw_text(draw, f"{afficher_nombre_fr(player['gold_earned'])}", (265, 171+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{afficher_nombre_fr(player['unit_killed'])}", (495, 120+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])}", (710, 119+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{afficher_nombre_fr(player['dmg_taken'])}", (710, 170+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{player['deaths']}", (525, 170+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        draw_text(draw, f"{afficher_nombre_fr(player['heal'])}", (710, 221+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
+
+                        print(player["items"])
+                        for i, item in enumerate(player["items"]):
+                            if item:
+                                item = item.convert("RGBA")
+                                item = add_corners(item, 15)
+                                item = item.resize((50, 50), Image.LANCZOS)
+                                img.paste(item, (192 + 53 * i, 236+(vert_decay*p_i)), item)
+
+                    fp = io.BytesIO()
+                    img.convert("RGBA").save(fp, "PNG")
+                    img.save(f"/home/dreus/trapard/files/swarm_output.png")
+                    return "/home/dreus/trapard/files/swarm_output.png"
+                except Exception as e:
+                    LogErrorInWebhook(error=f"[DRAW SWARM] {e}")
+                    print(e)
+                    return None
+
             def rang_le_plus_eleve(liste_rangs):
                 rangs_possibles = [
                     'iron IV', 'iron III', 'iron II', 'iron I',
@@ -420,12 +557,12 @@ class LolGames(commands.Cog):
                     return "Non classé"
                 else: return ranks[0].title()
 
-            async def get_last_matchs(player_uuid):
-                if player_uuid == "CgWYBiR461KCjYYZHwMLjxIKj7ZwtEl-kLmaezCYhqcOSm3iHmPR0Lb_vZtGv-pZfdxTw9aE4Zh7TA" or player_uuid == "nOIDyhRyBGJG7gjRBio0LOoBR9Lj389D1xeBYlfbymoZPt-8rzCX1058IcA5aT-4gCsWfy_2sh93DA":
-                    url = f"https://sea.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2&api_key={APIKEY}"
+            async def get_last_matchs(player_uuid, region):
+                if region == "oc1":
+                    subdom = "sea"
                 else:
-                    url = f"https://europe.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2&api_key={APIKEY}"
-                resp = await self.bot.session.get(url)
+                    subdom = "europe"
+                resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2&api_key={APIKEY}")
                 data = await resp.json()
                 try:
                     return data[0]
@@ -455,12 +592,12 @@ class LolGames(commands.Cog):
                             return queue["description"]
                     return "Mode de jeu inconnu"
 
-            async def get_match_data(matchid, player_uuid):
-                if player_uuid == "CgWYBiR461KCjYYZHwMLjxIKj7ZwtEl-kLmaezCYhqcOSm3iHmPR0Lb_vZtGv-pZfdxTw9aE4Zh7TA" or player_uuid == "nOIDyhRyBGJG7gjRBio0LOoBR9Lj389D1xeBYlfbymoZPt-8rzCX1058IcA5aT-4gCsWfy_2sh93DA":
-                    url = f"https://sea.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}"
+            async def get_match_data(matchid, player_uuid, region):
+                if region == "oc1":
+                    subdom = "sea"
                 else:
-                    url = f"https://europe.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}"
-                reponse = await self.bot.session.get(url)
+                    subdom = "europe"
+                reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}")
 
                 data = await reponse.json()
                 
@@ -762,6 +899,14 @@ class LolGames(commands.Cog):
                         bans.append(await getChampionIconByID(ban["championId"], api_version))
                 return output, results, bans
 
+            async def check_if_stored(matchId: str):
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        data = await conn.execute("SELECT * FROM lol_match_data WHERE match_id = ?", (matchId,))
+                        if data:
+                            return True
+                        return False
+
             async def task(data):
                 try:
                     trapcoins_emoji = "<:trapcoins:1108725845339672597>"
@@ -772,16 +917,63 @@ class LolGames(commands.Cog):
                                 print("row Error:", dict(row))
                                 LogErrorInWebhook()
                                 return
-                            last_match = await get_last_matchs(puuid)
+                            last_match = await get_last_matchs(puuid, region)
                             if self.bot.debug:
                                 print(last_match, last_stored_match)
-                            if last_stored_match != last_match:
+                            if last_stored_match != last_match: # If the last match is different from the last stored match
                                 if mentions == "None":
                                     mentions = "?"
                                     tier_bonus = 0
                                 
-                                match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid)
+                                match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
+                                isStored = await check_if_stored(last_match)
+                                if not isStored:
+                                    async with self.bot.pool.acquire() as conn:
+                                        async with conn.transaction():
+                                            await conn.execute("INSERT INTO lol_match_data (match_id, data) VALUES (?, ?)", (last_match, raw_data))
                                 queuetype = await getQueueByID(queuetype)
+                                if raw_data["info"]["gameMode"] == "STRAWBERRY": # THIS IS Straw game mode
+                                    try:
+                                        players = []
+                                        api_version = await getLastVersion()
+                                        game_info = {
+                                            "duration": raw_data["info"]["gameDuration"],
+                                            "winned": True if raw_data["info"]["teams"][0]["win"] else False,
+                                            "map": raw_data["info"]["mapId"]
+                                        }
+                                        for participant in raw_data["info"]["participants"]:
+                                            player = {}
+                                            player["pseudo"] = participant["riotIdGameName"]
+                                            player["championIcon"] = await getChampionIcon(str(participant["championName"]).replace("Strawberry_",""), api_version)
+                                            player["unit_killed"] = participant["totalMinionsKilled"]
+                                            player["gold_earned"] = participant["goldEarned"]
+                                            player["deaths"] = participant["deaths"]
+                                            player["ig_lvl"] = participant["champLevel"]
+                                            player["dmg_taken"] = participant["totalDamageTaken"]
+                                            player["dmg_dealt"] = participant["totalDamageDealt"]
+                                            player["heal"] = participant["totalHeal"]
+                                            player["items"] = [await getItemIcon(participant[f'item{i}'], api_version) for i in range(0, 7)]
+                                            players.append(player)
+                                        
+                                        x = await asyncio.to_thread(draw_swarm, players, game_info)
+                                        await asyncio.sleep(1.9)
+                                        file = discord.File(f"/home/dreus/trapard/files/swarm_output.png", filename=f"Swarm.png")
+                                        embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
+                                        embed.set_image(url=f"attachment://Swarm.png")
+                                        gameID = raw_data["metadata"]["matchId"].split("_")[1]
+                                        channel = self.bot.get_channel(1112233401286672394)
+                                        await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/euw/{gameID}", embed=embed))
+                                        async with self.bot.pool.acquire() as conn:
+                                            async with conn.transaction():
+                                                await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                        return
+                                    except Exception as e:
+                                        print(e, "\n"*3)
+                                        LogErrorInWebhook(f"LoL-Game Erreur sur le SWARM match `{last_match}`\npuuid: `{puuid}`")
+                                        async with self.bot.pool.acquire() as conn:
+                                            async with conn.transaction():
+                                                await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                        continue
                                 if queuetype == "Arena": # DO ARENA THING HERE
                                     pass
                                 try:
@@ -796,6 +988,20 @@ class LolGames(commands.Cog):
                                     tier_bonus = 0
                                     pass
                                 try:
+                                    print(1)
+                                    new_mastery_points = await Mastery.get_all_mastery(puuid = puuid, region = region, bot=self.bot)
+                                    print(2)
+                                    last_mastery_points = await Mastery.get_champion_mastery(puuid = puuid, region = region, champion_id = match_data["championId"], bot=self.bot)
+                                    print(3)
+                                    if new_mastery_points is not None:
+                                        await Mastery.update_user_mastery(new_mastery_points, self.bot)
+                                    else: print("new_mastery_points is None")
+                                    print(4)
+                                    for champ in new_mastery_points:
+                                        if champ["championId"] == match_data["championId"]:
+                                            new_champ_master = champ["championPoints"]
+                                            break
+                                    print(f'New Mastery Points: {new_champ_master}, Last Mastery Points: {last_mastery_points["championPoints"]}, Diff: {new_champ_master - last_mastery_points["championPoints"]}')
                                     timestamp = game_creation / 1000
                                     dt = datetime.datetime.fromtimestamp(timestamp)
                                     text += f'\n- **Total game: {afficher_nombre_fr(gains)} {str(trapcoins_emoji)} gagnés**'
@@ -861,8 +1067,8 @@ class LolGames(commands.Cog):
                 userId = arg[region_offset + 1]
             else:
                 userId = None
-
-            puuid = await get_puuid_by_name(ign, self.bot, region)
+            tagLine = ign.split("#")[1]
+            puuid = await get_puuid_by_name(ign, tagLine, self.bot)
             if puuid is None:
                 return await ctx.send("Erreur lors de la récupération du puuid !")
             async with self.bot.pool.acquire() as conn:
@@ -906,6 +1112,137 @@ class LolGames(commands.Cog):
                 for i in data:
                     igns.append(i[2])
                 return await ctx.send(f"Comptes trackés: `{', '.join(igns)}`")
+
+    @commands.hybrid_command()
+    async def mastery(self, ctx: commands.Context, *,champion: str):
+        outerSearch = False
+        if ',' in champion:
+            args = champion.split(",")
+            champion = str(args[0]).replace(" ", "")
+            if len(args) == 1:
+                return await ctx.send("Merci de mettre un pseudo et une région !\n- Exemple:  `!mastery Zac, Huge Genetic Gap#Tag, oce`")
+            if len(args) > 2:
+                pseudo = args[1].strip()
+                region = args[2].strip()
+                if region not in ["oce", "euw"]:
+                    return await ctx.send("Région invalide !\n- Voici les régions disponibles: `oce, euw`")
+                if '#' not in pseudo:
+                    return await ctx.send("Merci de mettre un pseudo valide !")
+                tagLine = pseudo.split("#")[1]
+                pseudo = pseudo.split("#")[0]
+                outerSearch = True
+        champion = champion.strip()
+
+        async with ctx.typing():
+            if not outerSearch:
+                async with self.bot.pool.acquire() as conn:
+                    data = await conn.fetchall("SELECT * FROM LoLGamesTracker WHERE userId=?", (str(ctx.author.id),))
+                    if len(data) == 0:
+                        return await ctx.send("Tu n'as pas de compte LoL tracké !\nUtilise `!mastery Champion, Pseudo#Tag, Region` pour rechercher un autre compte.\n- Exemple: `!mastery Zac, Huge Genetic Gap#OCE, oce`")
+                    else:
+                        puuid = data[0][3]
+                        region = data[0][4]
+            else:
+                puuid = await get_puuid_by_name(pseudo, tagLine, self.bot)
+                if puuid is None:
+                    return await ctx.send(f"Erreur lors de la récupération du profil `{pseudo}` !")
+            async with self.bot.session.get(f"https://ddragon.leagueoflegends.com/api/versions.json") as response:
+                data = await response.json()
+            api_version = data[0]
+            url = f"http://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/champion.json"
+            async with self.bot.session.get(url) as response:
+                champions_data = await response.json()
+            if champion.lower() not in [champions_data["data"][champ]["name"].lower().replace(" ", "") for champ in champions_data["data"]]:
+                suggestions = difflib.get_close_matches(champion.lower(), [champions_data["data"][champ]["name"].lower().replace(" ", "") for champ in champions_data["data"]], cutoff=0.5)
+                if len(suggestions) > 0:
+                    return await ctx.send(f"Ce champion n'existe pas !\nSuggestions: `{', '.join(suggestions)}`")
+                return await ctx.send("Ce champion n'existe pas !")
+            for champ in champions_data["data"]:
+                if champions_data["data"][champ]["name"].lower().replace(" ", "") == champion.lower():
+                    champ_id = champions_data["data"][champ]["key"]
+                    champion_clean_name = champions_data["data"][champ]["id"]
+                    break
+            try:
+                if 'euw' in region:
+                    region = 'euw1'
+                url = f"https://{region}.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champ_id}?api_key={getVar('RIOT_API')}"
+                print(url)
+                resp = await self.bot.session.get(url)
+                api_response = await resp.json()
+                async with self.bot.session.get(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-puuid/{puuid}?api_key={getVar('RIOT_API')}") as response:
+                    data = await response.json()
+                    pseudo = data["gameName"]
+                    game_tag = data["tagLine"]
+                if "status" in api_response:
+                    if api_response["status"]["message"] == "Not found":
+                        return await ctx.send(f"Le champion {champion} n'a jamais été joué par {pseudo}#{game_tag} !")
+                    return await ctx.send(f"Erreur lors de la récupération des données !1\n{api_response}")
+                async with self.bot.session.get(f'http://ddragon.leagueoflegends.com/cdn/{api_version}/img/champion/{champion_clean_name}.png', ssl=False) as response:
+                    response.raise_for_status()
+                    champion_icon_data = await response.read()
+                async with self.bot.session.get(f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}?api_key={getVar('RIOT_API')}") as response:
+                    data = await response.json()
+                    summoner_icon = data["profileIconId"]
+                
+                champ_lvl = api_response["championLevel"]
+                champ_points = api_response["championPoints"]
+                champ_points_since = api_response["championPointsSinceLastLevel"]
+                champ_points_until = api_response["championPointsUntilNextLevel"]
+                champ_tokens = api_response["tokensEarned"]
+                milestone = api_response["championSeasonMilestone"]
+                next_milestone = api_response["nextSeasonMilestone"]
+                if 'milestoneGrades' in api_response:
+                    milestone_grades = ", ".join(api_response["milestoneGrades"])
+                else:
+                    milestone_grades = "Aucun"
+                next_requirements = ", ".join([f"{grade}: {count}" for grade, count in next_milestone["requireGradeCounts"].items()])
+                reward_marks = next_milestone["rewardMarks"]
+                total_games_required = next_milestone["totalGamesRequires"]
+
+                embed = discord.Embed(
+                    title=f"Maîtrise du champion {champion.title()}",
+                    description=f"## Niveau {champ_lvl} - {champ_points:,} points".replace(',', ' '),
+                    color=0x2F3136
+                )
+
+                embed.add_field(
+                    name="Progression actuelle",
+                    value=(
+                        f"**Points depuis le dernier niveau :** {champ_points_since:,}\n"
+                        f"**Points pour le prochain niveau :** {abs(champ_points_until):,}\n"
+                        f"**Jetons obtenus :** {champ_tokens}\n"
+                        f"**Grades obtenus :** {milestone_grades}"
+                    ).replace(',', ' '),
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="Prochaine étape",
+                    value=(
+                        f"**Exigences des grades :** {next_requirements}\n"
+                        f"**Marques de récompense :** {reward_marks}\n"
+                        f"**Total de parties nécessaires :** {total_games_required}"
+                    ),
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="Statut du palier actuel",
+                    value=f"**Palier atteint :** {milestone}",
+                    inline=True
+                )
+                embed.set_footer(text=f"Riot Games API v{api_version} | Fait avec ❤️ par ReuS")
+
+                if region == "oc1":
+                    region = "oce"
+
+                file = discord.File(io.BytesIO(champion_icon_data), filename=f"{champion_clean_name}.png")
+                embed.set_thumbnail(url=f"attachment://{champion_clean_name}.png")
+                embed.set_author(name=f"{pseudo}#{game_tag}", icon_url=f"https://ddragon.leagueoflegends.com/cdn/{api_version}/img/profileicon/{summoner_icon}.png", url=f"https://www.leagueofgraphs.com/summoner/{region}/{str(pseudo).replace(' ', '%20')}-{game_tag}")
+                return await ctx.send(file=file, embed=embed)
+            except Exception as e:
+                traceback.print_exc()
+                return await ctx.send(f"Erreur lors de la récupération des données !2\n```{e}```")	
 
 async def setup(bot: Trapard):
     await bot.add_cog(LolGames(bot))

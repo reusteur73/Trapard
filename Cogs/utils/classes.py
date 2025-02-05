@@ -1,8 +1,114 @@
-import asqlite, discord, random, time
+import asqlite, discord, random, time, os
 # from bot import Trapard
 from .functions import LogErrorInWebhook, getUserById
 from typing import Literal
 from asqlite import Pool
+
+class VideoDB:
+    """Class to represent a video from the database."""
+    def __init__(self, id: int, pos: int, duree: int, name: str, artiste: str, downloader: int, thumbnail: str, channel_avatar: str, likes: int, views: int, video_id: str, txt_channel_id: int=None):
+        self.id = id
+        self.pos = pos
+        self.duree = duree
+        self.name = name
+        self.artiste = artiste
+        self.downloader = downloader
+        self.thumbnail = thumbnail
+        self.channel_avatar = channel_avatar
+        self.likes = likes
+        self.views = views
+        self.video_id = video_id
+        self.txt_channel_id = txt_channel_id
+
+    @classmethod
+    def from_row(cls, data):
+        if isinstance(data, dict):
+            return cls(
+                data['id'],
+                data['pos'],
+                data['duree'],
+                data['name'],
+                data['artiste'],
+                data['downloader'],
+                data['thumbnail'],
+                data['channel_avatar'],
+                data['likes'],
+                data['views'],
+                data['video_id'],
+                data['txt_channel_id']
+            )
+        else:
+            return cls(*data)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'pos': self.pos,
+            'duree': self.duree,
+            'name': self.name,
+            'artiste': self.artiste,
+            'downloader': self.downloader,
+            'thumbnail': self.thumbnail,
+            'channel_avatar': self.channel_avatar,
+            'likes': self.likes,
+            'views': self.views,
+            'video_id': self.video_id,
+            'txt_channel_id': self.txt_channel_id
+        }
+
+    def __str__(self):
+        return f"{self.id} - {self.pos} - {self.duree} - {self.name} - {self.artiste} - {self.downloader} - {self.thumbnail} - {self.channel_avatar} - {self.likes} - {self.views} - {self.video_id} - {self.txt_channel_id}"
+
+class Video:
+    """Class to represent a video from youtube and download it's thumbnail and channel avatar."""
+    title: str
+    channel: str
+    thumb: str
+    duration: int
+    likes: int
+    views: int
+    channel_avatar: str
+    id: str
+
+    def __init__(self, title: str, channel: str, thumb: str, duration: int, likes: int, views: int, channel_avatar: str, id: str, bot):
+        self.bot = bot
+        
+        self._id = id
+        self.title = title
+        self.channel = channel
+        self.thumb = thumb
+        self.duration = duration
+        self.likes = likes
+        self.views = views
+        self.channel_avatar = channel_avatar
+
+    @property
+    def thumb(self):
+        return self._thumb
+    
+    @thumb.setter
+    def thumb(self, value):
+        self._thumb = self.download_image(value, "thumb")
+        
+    @property
+    def channel_avatar(self):
+        return self._channel_avatar
+    
+    @channel_avatar.setter
+    async def channel_avatar(self, value):
+        self._channel_avatar = await self.download_image(value, "avatar")
+
+    def __str__(self):
+        return f"{self.title} - {self.channel} - {self.thumb} - {self.duration} - {self.likes} - {self.views} - {self.channel_avatar}"
+
+    async def download_image(self, url: str, _type: Literal["thumb","avatar"]) -> str:
+        if os.path.exists(f"files/{self._id}_{_type}.jpg"):
+            return f"files/{self._id}_{_type}.jpg"
+        async with self.bot.session.get(url) as resp:
+            image = await resp.read()
+            with open(f"files/{self._id}_{_type}.jpg", "wb") as f:
+                f.write(image)
+        return f"files/{self._id}_{_type}.jpg"
 
 class Trapardeur:
     """Gestion de la DB Trapardeur. DB Structure: `userId:str`, `vocalTime:int`, `messageSent:int`, `commandSent:int`"""
