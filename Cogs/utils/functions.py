@@ -1128,5 +1128,7 @@ async def get_next_index(pool):
     """
     async with pool.acquire() as conn:
         data = await conn.fetchone("SELECT pos FROM musiquesV3 ORDER BY id DESC LIMIT 1")
-    return int(data[0]) + 1
+    if data:
+        return int(data[0]) + 1
+    return 1
 

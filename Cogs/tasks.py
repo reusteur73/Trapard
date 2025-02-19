@@ -71,8 +71,8 @@ class Tasks(commands.Cog):
         self.update_status.start()
         self.interests.start()
         self.check_streak.start()
-        self.cryptoRapport.start()
-        self.cpas_bien.start()
+        # self.cryptoRapport.start()
+        # self.cpas_bien.start()
         self.check_users_xp.start()
         self.rencontres_nc.start()
         self.informatique.start()
@@ -374,7 +374,7 @@ class Tasks(commands.Cog):
                 embed = create_embed(title="Numéro trouvé", description=f"Dans les {sent} dernières annonces, j'ai trouvé {len(nums_found)} numéros.\nVoici la liste\n" + "\n- ".join(set(nums_found)))
                 await channel.send(embed=embed)
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=20)
     async def informatique(self):
         handler = Informatique(pool=self.bot.pool)
         channel = await self.bot.fetch_channel(1336339577757106276)
@@ -390,10 +390,13 @@ class Tasks(commands.Cog):
                     idx = post_data["id"]
                     user_id = post_data["user_id"]
                     prix = post_data["price"]
+                    if prix: prix = f"{afficher_nombre_fr(int(prix))} XPF"
+                    else : prix = "non renseigné"
                     is_in = await handler.is_in(idx)
+                    raw_field = f"# {titre}\n\n{texte}\n\n## Prix: {prix}"
                     if not is_in:
-                        if len(texte) < 4096:
-                            embed = create_embed(title=titre, description=f"{texte}\n\n# Prix : {afficher_nombre_fr(prix)} XPF")
+                        if len(raw_field) < 4096:
+                            embed = create_embed(title="", description=raw_field)
                             embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
                             medias = []
                             if post_data.get("medias"):

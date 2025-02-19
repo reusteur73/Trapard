@@ -4,10 +4,10 @@ from .utils.classes import VideoDB
 from youtube_search import YoutubeSearch
 from discord import app_commands
 from pytube import YouTube
-from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, afficher_nombre_fr, get_next_index, getVar
+from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, html
+import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
 from wavelink import AutoPlayMode
@@ -22,54 +22,69 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
         return
     
     async def download_image(url: str, _type: Literal["thumb","avatar"], video_id: str) -> str:
-        if url == "N/A":
-            print("N/A")
-            return "N/A"
-        if is_autoplay:
-            auto = "autoplay_"
+        if url == "N/A": return "N/A"
+        path = f"/home/dreus/trapard/files/mlist_images/{video_id}_{_type}.jpg"
+        if os.path.exists(path): return path
         else:
-            auto = ""
-        if os.path.exists(f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"):
-            print(f"Already exists {video_id}_{_type}.jpg")
-            return f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"
-        async with session.get(url) as response:
-            data = await response.read()
-        with open(f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg", "wb") as f:
-            f.write(data)
-        return f"/home/dreus/trapard/files/mlist_images/{auto}{video_id}_{_type}.jpg"
+            async with session.get(url) as response:
+                data = await response.read()
+            with open(path, "wb") as f:
+                f.write(data)
+            return path
 
     async def get_info(_id: str, dler, i) -> VideoDB:
-        async with session.get(f"https://www.youtube.com/watch?v={_id}") as resp:
-            page = await resp.text()
-        try:
-            title = html.unescape(page.split('{"contents":[{"videoPrimaryInfoRenderer":{"title":{"runs":[{"text":"')[1].split('"}]}')[0])
-        except:
-            title = "Unknown Title"
-        try:
-            channel = page.split('Accéder à la chaîne – ')[1].split(' -')[0]
-        except:
-            channel = "Various Artists"
-        try:
-            likes = page.split('{"iconName":"LIKE","title":"')[1].split('"')[0]
-        except:
-            likes = 666
-        try:
-            views = html.unescape(page.split('"shortViewCount":{"simpleText":"')[1].split('"')[0])
-        except:
-            views = 666
-        try:
-            duration = int(page.split('"lengthInSeconds":')[1].split(',"')[0])
-        except:
-            duration = 180
-        try:
-            thumb = await download_image(f"https://img.youtube.com/vi/{_id}/maxresdefault.jpg", "thumb", _id)
-        except:
-            thumb = f"https://img.youtube.com/vi/{_id}/maxresdefault.jpg"
-        channel_avatar = await download_image(page.split('{"videoOwnerRenderer":{"thumbnail":{"thumbnails":[{"url":"')[1].split('","width":176,"height":176}]}')[0].split('{"url":"')[-1], 'avatar', _id)
-        v = VideoDB(id=0,pos=i, duree=duration, name=title, artiste=channel, downloader=dler, thumbnail=thumb, channel_avatar=channel_avatar, likes=likes, views=views, video_id=_id)
+        url = f"https://www.googleapis.com/youtube/v3/videos"
+        params = {
+            "part": "snippet,statistics,contentDetails",
+            "id": _id,
+            "key": getVar('YOUTUBE_API')
+        }
+
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+
+        if "items" not in data or not data["items"]:
+            print(f"❌ Vidéo introuvable : {_id}", data)
+            return None  # Vidéo introuvable
+
+        video = data["items"][0]
+
+        title = video["snippet"]["title"]
+        channel = video["snippet"]["channelTitle"]
+        likes = int(video["statistics"].get("likeCount", 666))
+        views = int(video["statistics"].get("viewCount", 666))
+        duration = int(isodate.parse_duration(video["contentDetails"]["duration"]).total_seconds())
+        thumb = await download_image(video["snippet"]["thumbnails"]["high"]["url"], "thumb", _id)
+        channel_avatar_url = await get_channel_avatar(video["snippet"]["channelId"])
+        channel_avatar = await download_image(channel_avatar_url, "avatar", _id)
+
+        v = VideoDB(
+            id=0, pos=i, duree=duration, name=title, artiste=channel,
+            downloader=dler, thumbnail=thumb, channel_avatar=channel_avatar,
+            likes=likes, views=views, video_id=_id
+        )
+
         if not is_autoplay:
             await save_to_db(v, dler, pool, index=i)
+
         return v
+
+    async def get_channel_avatar(channel_id):
+        """Récupère l'avatar de la chaîne."""
+        url = "https://www.googleapis.com/youtube/v3/channels"
+        params = {
+            "part": "snippet",
+            "id": channel_id,
+            "key": getVar('YOUTUBE_API')
+        }
+
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+
+        if "items" in data and data["items"]:
+            return data["items"][0]["snippet"]["thumbnails"]["high"]["url"]
+        
+        return "https://www.example.com/default-avatar.jpg"
 
     # First of all check if the video is already in the db
     if not is_autoplay:
@@ -87,6 +102,7 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
         return video
     else:
         next_index = await get_next_index(pool)
+        if next_index is None: next_index = 1
         video = await get_info(video_id, downloader, next_index)
         return video
 
@@ -371,9 +387,9 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
 
     draw_text(draw, artiste, (140, 910), (0, 40), ImageFont.truetype(FONT, 30), "white") #
 
-    draw_text(draw, f"{likes}", (1125, 907), (0, 40), ImageFont.truetype(FONT, 35), "white")
+    draw_text(draw, f"{display_big_nums(likes)}", (1125, 907), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
-    draw_text(draw, f"{views}", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
+    draw_text(draw, f"{display_big_nums(views)} vues", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
     for i, _video in enumerate(next_musics):
         _, _thumbnail = _video.thumbnail
