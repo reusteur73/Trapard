@@ -1,8 +1,12 @@
 from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, create_embed, seconds_until, write_item, convert_txt_to_colored,getVar
 from .utils.data import interests_indexs, interests_infos
+from .utils.path import ANNONCE_AVATAR_PATH
 from asyncio import sleep
 from bs4 import BeautifulSoup
-import discord, time, datetime, json, re
+import discord, time, datetime, json, re, asyncio
+from io import BytesIO
+from PIL import Image
+from aiohttp import ClientSession
 from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
@@ -31,9 +35,33 @@ def calculate_level(xp_total):
     return xp_total // xp_needed_per_level
 
 class RencontreNc:
-    def __init__(self, pool: Pool) -> None:
+    def __init__(self, pool: Pool, session: ClientSession) -> None:
         self.pool = pool
-
+        self.session = session
+    def is_image_downloaded(self, userid: str) -> bool:
+        try:
+            with open(f"{ANNONCE_AVATAR_PATH}/{userid}.webp", "rb") as f:
+                return True
+        except FileNotFoundError:
+            return False
+        
+    async def download_image(self, userid: str) -> bool:
+        try:
+            async with self.session.get("https://thispersondoesnotexist.com/") as resp:
+                if resp.status == 200:
+                    image_bytes = await resp.read()
+                    image = Image.open(BytesIO(image_bytes))
+                    if image.format not in ['JPEG', 'PNG']:
+                        print("Downloaded content is not a valid image format.")
+                        return False
+                    
+                    image.save(f"{ANNONCE_AVATAR_PATH}/{userid}.webp", format="WEBP")
+                    return True
+                else:
+                    return False
+            re
+        except Exception as e:
+            LogErrorInWebhook(error=f"[IMAGE DOWNLOAD] {e} USER={userid}")
     async def save(self, id:int, text:str, title: str, category: str):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -46,8 +74,31 @@ class RencontreNc:
         return bool(data)
 
 class Informatique:
-    def __init__(self, pool: Pool) -> None:
+    def __init__(self, pool: Pool, session: ClientSession) -> None:
         self.pool = pool
+        self.session = session
+
+    def is_image_downloaded(self, userid: str) -> bool:
+        try:
+            with open(f"{ANNONCE_AVATAR_PATH}/{userid}.webp", "rb") as f:
+                return True
+        except FileNotFoundError:
+            return False
+        
+    async def download_image(self, userid: str) -> bool:
+        try:
+            async with self.session.get("https://thispersondoesnotexist.com/") as resp:
+                if resp.status == 200:
+                    image_bytes = await resp.read()
+                    image = Image.open(BytesIO(image_bytes))
+                    if image.format not in ['JPEG', 'PNG']:
+                        print("Downloaded content is not a valid image format.")
+                        return False
+                    image.save(f"{ANNONCE_AVATAR_PATH}/{userid}.webp", format="WEBP")
+                    return True
+            return False
+        except Exception as e:
+            LogErrorInWebhook(error=f"[IMAGE DOWNLOAD] {e} USER={userid}")
 
     async def save(self, id:int, user_id: int,text:str, title: str, medias: list, created_at: str):
         async with self.pool.acquire() as conn:
@@ -340,7 +391,7 @@ class Tasks(commands.Cog):
     async def rencontres_nc(self):
         POSTS_URLS = ["homme-femme-5", "femme-homme-5", "transexuels-5", "homme-homme-5","plan-q-5", "travesti-5"]
         POST_ENDP = "https://api.annonces.nc/posts"
-        handler = RencontreNc(pool=self.bot.pool)
+        handler = RencontreNc(pool=self.bot.pool, session=self.bot.session)
         nums_found = []
         channel = await self.bot.fetch_channel(1211607454400651264)
         sent = 0
@@ -357,26 +408,49 @@ class Tasks(commands.Cog):
                             texte = post_data["description"]
                             titre = post_data["title"]
                             idx = post_data["id"]
+                            user_id = post_data["user_id"]
                             cat = post_data['category']['name']
                             is_in = await handler.is_in(idx)
+
+                            attempts = 0
+                            while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 3:
+                                status = await handler.download_image(user_id)
+                                if status:
+                                    break
+                                else:
+                                    print(f"Image not downloaded for user {user_id}, attempt {attempts + 1}")
+                                    await sleep(1)
+                                attempts += 1
+
+                            
                             if not is_in:
                                 if len(texte) < 4096:
-                                    matches = pattern.findall(texte)
-                                    if matches:
-                                        for m in matches:
-                                            if len(m) == 3:
-                                                nums_found.append(f"{m[0]}{m[1]}{m[2]}")
-                                    embed = create_embed(title=titre, description=f"- {cat}\n- {texte}")
-                                    await channel.send(embed=embed)
-                                    sent += 1
-                                await handler.save(idx, texte, titre, cat)
-            if len(nums_found) > 0:
-                embed = create_embed(title="Numéro trouvé", description=f"Dans les {sent} dernières annonces, j'ai trouvé {len(nums_found)} numéros.\nVoici la liste\n" + "\n- ".join(set(nums_found)))
-                await channel.send(embed=embed)
+                                    embed = create_embed(title="", description=f"# {titre}\n\n{texte}\n\n## Catégorie: {cat}")
+                                    local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
+                                    if handler.is_image_downloaded(userid=str(user_id)):
+                                        embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
+                                        with open(local_icon_path, "rb") as f:
+                                            file = discord.File(f, filename=f"{user_id}.webp")
+                                    else:
+                                        file = None
+                                        embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
+                                    medias = []
+                                    if post_data.get("medias"):
+                                        for media in post_data["medias"]:
+                                            if 'large' in media['versions']:
+                                                embed.set_image(url=media['versions']['large']['url'])
+                                                medias.append(media['versions']['large']['url'])
+                                                break
+                                    if file:
+                                        await channel.send(embed=embed, file=file)
+                                    else:
+                                        await channel.send(embed=embed)
+                                nums_found += pattern.findall(texte)
+                                sent += 1
 
     @tasks.loop(minutes=20)
     async def informatique(self):
-        handler = Informatique(pool=self.bot.pool)
+        handler = Informatique(pool=self.bot.pool, session=self.bot.session)
         channel = await self.bot.fetch_channel(1336339577757106276)
         async with self.bot.session.get("https://api.annonces.nc/posts?by_category=informatique-1&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1") as resp:
             data = await resp.json()
@@ -393,11 +467,26 @@ class Tasks(commands.Cog):
                     if prix: prix = f"{afficher_nombre_fr(int(prix))} XPF"
                     else : prix = "non renseigné"
                     is_in = await handler.is_in(idx)
+
+                    attempts = 0
+                    while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 5:
+                        status = await handler.download_image(user_id)
+                        if status:
+                            break
+                        attempts += 1
+
                     raw_field = f"# {titre}\n\n{texte}\n\n## Prix: {prix}"
                     if not is_in:
                         if len(raw_field) < 4096:
                             embed = create_embed(title="", description=raw_field)
-                            embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
+                            local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
+                            if handler.is_image_downloaded(userid=str(user_id)):
+                                embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
+                                with open(local_icon_path, "rb") as f:
+                                    file = discord.File(f, filename=f"{user_id}.webp")
+                            else:
+                                file = None
+                                embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
                             medias = []
                             if post_data.get("medias"):
                                 for media in post_data["medias"]:
@@ -405,7 +494,10 @@ class Tasks(commands.Cog):
                                         embed.set_image(url=media['versions']['large']['url'])
                                         medias.append(media['versions']['large']['url'])
                                         break
-                            await channel.send(embed=embed)
+                            if file:
+                                await channel.send(embed=embed, file=file)
+                            else:
+                                await channel.send(embed=embed)
                         await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
 async def setup(bot: Trapard):
     await bot.add_cog(Tasks(bot))

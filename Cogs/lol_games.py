@@ -3,7 +3,7 @@ from discord.ext import commands, tasks
 from typing import TYPE_CHECKING, Tuple, List
 from PIL import ImageDraw, ImageFont, Image
 from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWebhook, calc_usr_gain_by_tier, getVar, command_counter
-from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH
+from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA 
 from bot import Trapard
 
 async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
@@ -84,7 +84,7 @@ class LolGames(commands.Cog):
         self.bot = bot
         self.check_lol_games.start()
 
-    @tasks.loop(seconds=120)
+    @tasks.loop(seconds=180)
     async def check_lol_games(self):
         try:
             APIKEY = getVar("RIOT_API")
@@ -451,8 +451,8 @@ class LolGames(commands.Cog):
                     im.putalpha(alpha)
                     return im
                 try:
-                    FONT = "/home/dreus/trapard/files/UbuntuNerdFont-Regular.ttf"
-                    img = Image.open(f"/home/dreus/trapard/files/swarm{len(players)}.png")
+                    FONT = ImageFont.truetype(LOL_FONT)
+                    img = Image.open(f"{FILES_PATH}swarm{len(players)}.png")
                     draw = ImageDraw.Draw(img)
 
                     vert_decay = 202
@@ -500,12 +500,99 @@ class LolGames(commands.Cog):
 
                     fp = io.BytesIO()
                     img.convert("RGBA").save(fp, "PNG")
-                    img.save(f"/home/dreus/trapard/files/swarm_output.png")
-                    return "/home/dreus/trapard/files/swarm_output.png"
+                    img.save(f"{FILES_PATH}swarm_output.png")
+                    return f"{FILES_PATH}swarm_output.png"
                 except Exception as e:
                     LogErrorInWebhook(error=f"[DRAW SWARM] {e}")
                     print(e)
                     return None
+
+            def draw_arena(player: dict):
+                def draw_text(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
+                    text_width, text_height = draw.textlength(text, font=font), 24
+                    x = coordinates[0]
+                    y = int(coordinates[1] + (box_size[1] - text_height) // 2)
+                    
+                    draw.text(
+                        (x, y),
+                        text,
+                        font=font,
+                        fill=fill
+                    )
+                
+                def add_corners(im, rad):
+                    circle = Image.new('L', (rad * 2, rad * 2), 0)
+                    draw = ImageDraw.Draw(circle)
+                    draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
+                    alpha = Image.new('L', im.size, 255)
+                    w, h = im.size
+                    alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
+                    alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
+                    alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
+                    alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
+                    im.putalpha(alpha)
+                    return im
+                
+                FONT = LOL_FONT
+                img = Image.open(LOL_IMAGE_ARENA)
+                draw = ImageDraw.Draw(img)
+                # draw player name
+                draw_text(draw, player["riotIdGameName"], (53, 79), (0, 40), ImageFont.truetype(FONT, 22), "white")
+
+                # draw kda
+                draw_text(draw, f"{player['kills']}/{player['deaths']}/{player['assists']}", (385, 80), (0, 40), ImageFont.truetype(FONT, 22), "white")
+
+                # draw kda ratio
+                ratio = round((player["kills"] + player["assists"]) / max(1, player["deaths"]), 2)
+                draw_text(draw, f"{ratio} KDA", (375, 80+38), (0, 40), ImageFont.truetype(FONT, 22), "white")
+
+                # draw damage dealt
+                draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])} DMG", (355, 80+76), (0, 40), ImageFont.truetype(FONT, 22), "white")
+
+                # draw position
+                position_data = {
+                    1: ("#FFD700", "st"),
+                    2: ("#C0C0C0", "nd"),
+                    3: ("#CD7F32", "rd"),
+                    4: ("#4CAF50", "th"),
+                    5: ("#2196F3", "th"),
+                    6: ("#FF9800", "th"),
+                    7: ("#9C27B0", "th"),
+                    8: ("#F44336", "th"),
+                }
+                pos = max(1, min(player["PlayerScore0"], 8))
+                color, suffix = position_data[pos]
+                draw_text(draw, f"{player['PlayerScore0']}{suffix}", (103, 268), (0, 40), ImageFont.truetype(FONT, 48), color)
+
+                # draw items
+                for i, item in enumerate(player["items"]):
+                    item = item.convert("RGBA")
+                    if i == 6:
+                        item = add_corners(item, 35)
+                    else:
+                        item = add_corners(item, 15)
+                    item = item.resize((40, 40), Image.LANCZOS)
+                    if i < 3:
+                        img.paste(item, (335 + 47 * i, 230), item)
+                    else:
+                        img.paste(item, (335 + 47 * (i-4)+46, 281), item)
+
+                # draw champion icon
+                player["championIcon"] = player["championIcon"].convert("RGBA")
+                player["championIcon"] = add_corners(player["championIcon"], 15)
+                player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
+                img.paste(player["championIcon"], (57, 141), player["championIcon"])
+
+                player["mate_championIcon"] = player["mate_championIcon"].convert("RGBA")
+                player["mate_championIcon"] = add_corners(player["mate_championIcon"], 15)
+                player["mate_championIcon"] = player["mate_championIcon"].resize((55, 55), Image.LANCZOS)
+                img.paste(player["mate_championIcon"], (179, 187), player["mate_championIcon"])
+
+                # save image
+                fp = io.BytesIO()
+                img.convert("RGBA").save(fp, "PNG")
+                img.save(f"{FILES_PATH}arena_output.png")
+                return f"{FILES_PATH}arena_output.png"
 
             def rang_le_plus_eleve(liste_rangs):
                 rangs_possibles = [
@@ -558,16 +645,12 @@ class LolGames(commands.Cog):
                 else: return ranks[0].title()
 
             async def get_last_matchs(player_uuid, region):
-                if region == "oc1":
-                    subdom = "sea"
-                else:
-                    subdom = "europe"
+                if region == "oc1": subdom = "sea"
+                else: subdom = "europe"
                 resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2&api_key={APIKEY}")
                 data = await resp.json()
-                try:
-                    return data[0]
-                except:
-                    return None
+                try: return data[0]
+                except: return None
 
             async def getSumsByID(id: int, api_version: str):
                 async with self.bot.session.get(f"https://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/summoner.json") as response:
@@ -593,10 +676,8 @@ class LolGames(commands.Cog):
                     return "Mode de jeu inconnu"
 
             async def get_match_data(matchid, player_uuid, region):
-                if region == "oc1":
-                    subdom = "sea"
-                else:
-                    subdom = "europe"
+                if region == "oc1": subdom = "sea"
+                else: subdom = "europe"
                 reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}")
 
                 data = await reponse.json()
@@ -924,7 +1005,7 @@ class LolGames(commands.Cog):
                                 if mentions == "None":
                                     mentions = "?"
                                     tier_bonus = 0
-                                
+                                api_version = await getLastVersion()
                                 match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
                                 isStored = await check_if_stored(last_match)
                                 if not isStored:
@@ -935,7 +1016,6 @@ class LolGames(commands.Cog):
                                 if raw_data["info"]["gameMode"] == "STRAWBERRY": # THIS IS Straw game mode
                                     try:
                                         players = []
-                                        api_version = await getLastVersion()
                                         game_info = {
                                             "duration": raw_data["info"]["gameDuration"],
                                             "winned": True if raw_data["info"]["teams"][0]["win"] else False,
@@ -955,14 +1035,16 @@ class LolGames(commands.Cog):
                                             player["items"] = [await getItemIcon(participant[f'item{i}'], api_version) for i in range(0, 7)]
                                             players.append(player)
                                         
-                                        x = await asyncio.to_thread(draw_swarm, players, game_info)
+                                        await asyncio.to_thread(draw_swarm, players, game_info)
                                         await asyncio.sleep(1.9)
-                                        file = discord.File(f"/home/dreus/trapard/files/swarm_output.png", filename=f"Swarm.png")
+                                        file = discord.File(f"{FILES_PATH}swarm_output.png", filename=f"Swarm.png")
                                         embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
                                         embed.set_image(url=f"attachment://Swarm.png")
                                         gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                         channel = self.bot.get_channel(1112233401286672394)
-                                        await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/euw/{gameID}", embed=embed))
+                                        if raw_data["info"]["platformId"] == "OC1": _region = "oce"
+                                        else: _region = raw_data["info"]["platformId"].lower()
+                                        await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
                                         async with self.bot.pool.acquire() as conn:
                                             async with conn.transaction():
                                                 await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
@@ -974,8 +1056,36 @@ class LolGames(commands.Cog):
                                             async with conn.transaction():
                                                 await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
                                         continue
-                                if queuetype == "Arena": # DO ARENA THING HERE
-                                    pass
+                                elif raw_data["info"]["gameMode"] == "CHERRY": # Arena Mode 
+                                    arena_player = {}
+
+                                    for participant in raw_data["info"]["participants"]:
+                                        if participant["PlayerScore0"] == match_data["PlayerScore0"] and participant["riotIdGameName"] != match_data["riotIdGameName"]:
+                                            arena_player["mate_championIcon"] = participant["championId"]
+                                            break
+                                    arena_player["championIcon"] = await getChampionIconByID(match_data["championId"], api_version)
+                                    arena_player["mate_championIcon"] = await getChampionIconByID(arena_player["mate_championIcon"], api_version)
+                                    arena_player["kills"] = match_data["kills"]
+                                    arena_player["deaths"] = match_data["deaths"]
+                                    arena_player["assists"] = match_data["assists"]
+                                    arena_player["riotIdGameName"] = match_data["riotIdGameName"]
+                                    arena_player["dmg_dealt"] = match_data["totalDamageDealtToChampions"]
+                                    arena_player["PlayerScore0"] = match_data["PlayerScore0"]
+                                    arena_player["items"] = [await getItemIcon(match_data[f'item{i}'], api_version) for i in range(0, 7)]
+                                    await asyncio.to_thread(draw_arena, arena_player)
+                                    await asyncio.sleep(1.9)
+                                    file = discord.File(f"{FILES_PATH}arena_output.png", filename=f"Arena.png")
+                                    embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
+                                    embed.set_image(url=f"attachment://Arena.png")
+                                    gameID = raw_data["metadata"]["matchId"].split("_")[1]
+                                    channel = self.bot.get_channel(1112233401286672394)
+                                    if raw_data["info"]["platformId"] == "OC1": _region = "oce"
+                                    else: _region = raw_data["info"]["platformId"].lower()
+                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
+                                    async with self.bot.pool.acquire() as conn:
+                                        async with conn.transaction():
+                                            await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                    continue
                                 try:
                                     if mentions != "?":
                                         gains, text, _, texte_to_send = await calculate_gain(match_data, game_duration, mentions)
@@ -988,20 +1098,14 @@ class LolGames(commands.Cog):
                                     tier_bonus = 0
                                     pass
                                 try:
-                                    print(1)
                                     new_mastery_points = await Mastery.get_all_mastery(puuid = puuid, region = region, bot=self.bot)
-                                    print(2)
                                     last_mastery_points = await Mastery.get_champion_mastery(puuid = puuid, region = region, champion_id = match_data["championId"], bot=self.bot)
-                                    print(3)
                                     if new_mastery_points is not None:
                                         await Mastery.update_user_mastery(new_mastery_points, self.bot)
-                                    else: print("new_mastery_points is None")
-                                    print(4)
                                     for champ in new_mastery_points:
                                         if champ["championId"] == match_data["championId"]:
                                             new_champ_master = champ["championPoints"]
                                             break
-                                    print(f'New Mastery Points: {new_champ_master}, Last Mastery Points: {last_mastery_points["championPoints"]}, Diff: {new_champ_master - last_mastery_points["championPoints"]}')
                                     timestamp = game_creation / 1000
                                     dt = datetime.datetime.fromtimestamp(timestamp)
                                     text += f'\n- **Total game: {afficher_nombre_fr(gains)} {str(trapcoins_emoji)} gagnés**'
@@ -1009,7 +1113,6 @@ class LolGames(commands.Cog):
                                         text += f"\n- {texte_to_send}"
                                     text += f"\n- Bonus tier: {display_big_nums(tier_bonus)} {str(trapcoins_emoji)} || ({afficher_nombre_fr(tier_bonus)} {str(trapcoins_emoji)}) ||"                  
                                     channel = self.bot.get_channel(1112233401286672394)
-                                    api_version = await getLastVersion()
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
                                     output, results, bans = await get_game_data(raw_data, api_version)
                                     await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, output, results, bans, mentions)
@@ -1017,12 +1120,14 @@ class LolGames(commands.Cog):
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
                                     embed.set_image(url=f"attachment://Game.png")
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
-                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/euw/{gameID}", embed=embed))
+                                    if raw_data["info"]["platformId"] == "OC1": _region = "oce"
+                                    else: _region = raw_data["info"]["platformId"].lower()
+                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
                                     async with self.bot.pool.acquire() as conn:
                                         async with conn.transaction():
                                             await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
-                                    return
+                                    continue
                                 except:
                                     LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`")
                                     async with self.bot.pool.acquire() as conn:
