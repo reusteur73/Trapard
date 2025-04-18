@@ -174,7 +174,7 @@ def create_embed(title: str, description: str, color=discord.Color.blue(), autho
     else:
         maintenant = datetime.datetime.now()
         format_date_heure = maintenant.strftime("à %H:%M le %d/%m/%y")
-        embed.set_footer(text=f"Trapard © by !Reu$ - {format_date_heure}", icon_url="https://files.reus.nc/images/variable_ln7vj.png?v=2")
+        embed.set_footer(text=f"Trapard © by !Reu$ - {format_date_heure}", icon_url="https://i.imgur.com/z4xVgQp.png")
     return embed
 
 def convert_str_to_emojis(string):
@@ -536,6 +536,10 @@ def convert_txt_to_colored(text: str, color: str, background: str=None, bold: bo
 def format_duration(duration_in_seconds: int) -> str:
     """Return HH:MM:SS formatted duration from seconds."""
     try:
+        if isinstance(duration_in_seconds, str):
+            duration_in_seconds = int(duration_in_seconds)
+        if duration_in_seconds < 0:
+            raise ValueError("Duration cannot be negative")
         days = duration_in_seconds // 86400
         hours = (duration_in_seconds % 86400) // 3600
         minutes = (duration_in_seconds % 3600) // 60
