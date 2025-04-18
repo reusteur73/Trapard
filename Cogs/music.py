@@ -13,12 +13,14 @@ from PIL import Image, ImageDraw, ImageFont
 from wavelink import AutoPlayMode
 from aiohttp import ClientSession
 
+music_table = "musiquesV3"
+
 async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False):
     
     async def save_to_db(video: VideoDB, dler:int, pool:Pool, index:int):
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("INSERT INTO musiquesV3 (pos, duree, name, artiste, downloader, thumbnail, channel_avatar, likes, views, video_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (index, video.duree, video.name, video.artiste, dler, video.thumbnail, video.channel_avatar, video.likes, video.views, video.video_id))
+                await conn.execute(f"INSERT INTO {music_table} (pos, duree, name, artiste, downloader, thumbnail, channel_avatar, likes, views, video_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (index, video.duree, video.name, video.artiste, dler, video.thumbnail, video.channel_avatar, video.likes, video.views, video.video_id))
         return
     
     async def download_image(url: str, _type: Literal["thumb","avatar"], video_id: str) -> str:
@@ -89,7 +91,7 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
     # First of all check if the video is already in the db
     if not is_autoplay:
         async with pool.acquire() as conn:
-            data = await conn.fetchone("SELECT * FROM musiquesV3 WHERE video_id = ?", (video_id,))
+            data = await conn.fetchone(f"SELECT * FROM {music_table} WHERE video_id = ?", (video_id,))
         if data:
             data_list = list(data)
             if 'debian' in str(data_list[6]):
@@ -583,7 +585,7 @@ class EndSessionBtn(discord.ui.View):
             except discord.errors.ClientException:
                 vc: wavelink.Player = interaction.guild.voice_client
             async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall("SELECT name FROM musiques")
+                data = await conn.fetchall(f"SELECT name FROM {music_table}")
                 for d in data:
                     out.append(d[0])
             zic_chann = discord.utils.get(interaction.guild.channels, name="musique", type=discord.ChannelType.text)
@@ -670,14 +672,14 @@ class MusicList_Handler():
         """
         out = []
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT name FROM musiques")
+            data = await conn.fetchall(f"SELECT name FROM {music_table}")
             for d in data:
                 out.append(d[0])
         return out
 
     async def get_musique_size(self):
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall('SELECT * FROM musiques')
+            data = await conn.fetchall(f'SELECT * FROM {music_table}')
         return len(data)
 
     async def remove_from_music_list(self, index: str):
@@ -688,20 +690,20 @@ class MusicList_Handler():
         
         async with self.bot.pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("DELETE FROM musiques WHERE name=? AND pos=?", (name, index))
+                await conn.execute(f"DELETE FROM {music_table} WHERE name=? AND pos=?", (name, index))
                 
                 # Obtenez la taille de la liste une seule fois
                 musique_size = await self.get_musique_size()
                 
                 for i in range(int(index) + 1, musique_size+10):
-                    await conn.execute("UPDATE musiques SET pos = ? WHERE pos = ?", (i - 1, i))
+                    await conn.execute(f"UPDATE {music_table} SET pos = ? WHERE pos = ?", (i - 1, i))
         return
 
     async def get_all_music_name(self):
         """Return all music name in a dict where `key is video_id` and `value is [index, name]`"""
         try:
             async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall("SELECT video_id, pos, name FROM musiquesV3")
+                data = await conn.fetchall(f"SELECT video_id, pos, name FROM {music_table}")
             if data:
                 out = {}
                 for item in data:
@@ -715,7 +717,7 @@ class MusicList_Handler():
         return `index`, `user_downloader` of song by music_name
         """
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchone("SELECT pos, downloader FROM musiques WHERE name = ?", (name,))
+            data = await conn.fetchone(f"SELECT pos, downloader FROM {music_table} WHERE name = ?", (name,))
         if data:
             pos, downloader = data
             return str(pos), str(downloader)
@@ -729,7 +731,7 @@ class MusicList_Handler():
         """
         t = f"Les trouvailles pour la recherche `{name}`:\n\n"
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT name, pos FROM musiques")
+            data = await conn.fetchall(f"SELECT name, pos FROM {music_table}")
             found = []
             for item in data:
                 if name.lower() in str(item[0]).lower():
@@ -745,7 +747,7 @@ class MusicList_Handler():
         return the next index that should be in mlist.
         """
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchone("SELECT pos FROM musiques ORDER BY id DESC LIMIT 1")
+            data = await conn.fetchone(f"SELECT pos FROM {music_table} ORDER BY id DESC LIMIT 1")
         return int(data[0]) + 1
 
     async def add_music_to_list(self, new_music: list):
@@ -762,7 +764,7 @@ class MusicList_Handler():
     async def getName(self, index: str):
         """return song name by index"""
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchone("SELECT name FROM musiques WHERE pos = ?", int(index))
+            data = await conn.fetchone(f"SELECT name FROM {music_table} WHERE pos = ?", int(index))
         if data:
             return data[0]
         return "Unknown index."
@@ -770,7 +772,7 @@ class MusicList_Handler():
     async def get_song_duration_by_index(self, index:str):
         """return int(song) duration by index"""
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchone("SELECT duree FROM musiques WHERE pos = ?", int(index))
+            data = await conn.fetchone(f"SELECT duree FROM {music_table} WHERE pos = ?", int(index))
         if data:
             return int(data[0])
         else:
@@ -781,7 +783,7 @@ class MusicList_Handler():
         return list of unique userid music downloader.
         """
         async with self.bot.pool.acquire() as conn:
-            downloaders = await conn.fetchall("SELECT DISTINCT downloader FROM musiques")
+            downloaders = await conn.fetchall(f"SELECT DISTINCT downloader FROM {music_table}")
         out = []
         for downloader in downloaders:
             out.append(downloader[0])
@@ -1465,7 +1467,7 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
     if from_web.isdigit():
         print("index")
         async with pool.acquire() as conn:
-            data = await conn.fetchone("SELECT * FROM musiquesV3 WHERE pos = ?", (int(from_web),))
+            data = await conn.fetchone(f"SELECT * FROM {music_table} WHERE pos = ?", (int(from_web),))
         if data is None:
             print("No data found")
             return
@@ -1667,24 +1669,27 @@ class Music(commands.Cog):
         if not isinstance(ctx, CustomContext):
             try: await ctx.interaction.response.defer()
             except: print("error defer")
+        
         try:
-            try:
-                await ctx.message.add_reaction("\u2705")
-            except discord.errors.NotFound:
-                pass
-            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
-            for unique in self.bot.unique_downloader:
-                user = await self.bot.fetch_user(int(unique))
-                if user:
-                    name = user.display_name
-                    options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
-            else:
-                drop = DropDownMlist(ctx=ctx, options=options, bot=self.bot)
-                mlist = await getMList(bot=self.bot)
-                view = QueueBtnV2(mlist, len(mlist), ctx)
-                view.add_item(drop)
-                await ctx.send(embed=mlist[0], view=view)
+            async with ctx.channel.typing():
+                try:
+                    await ctx.message.add_reaction("\u2705")
+                except discord.errors.NotFound:
+                    pass
+                await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+                options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
+                for unique in self.bot.unique_downloader:
+                    user = await self.bot.fetch_user(int(unique))
+                    if user:
+                        name = user.display_name
+                        options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
+                else:
+                    drop = DropDownMlist(ctx=ctx, options=options, bot=self.bot)
+                    mlist = await getMList(bot=self.bot)
+                    view = QueueBtnV2(mlist, len(mlist), ctx)
+                    view.add_item(drop)
+                    await ctx.send(embed=mlist[0], view=view)
+            return
         except:
             LogErrorInWebhook()
 
@@ -1828,7 +1833,7 @@ class Music(commands.Cog):
                 video_id = musique_name
             elif index is not None:
                 async with self.bot.pool.acquire() as conn:
-                    data = await conn.fetchone("SELECT video_id, name FROM musiquesV3 WHERE pos = ?", (index,))
+                    data = await conn.fetchone(f"SELECT video_id, name FROM {music_table} WHERE pos = ?", (index,))
                 if data is None:
                     return await ctx.send("Aucune musique ne correspond à cet index.")
                 video_id = data[0]
@@ -1840,12 +1845,12 @@ class Music(commands.Cog):
                         pass
                 async with self.bot.pool.acquire() as conn:
                     async with conn.transaction():
-                        await conn.execute("DELETE FROM musiquesV3 WHERE video_id = ?", (video_id,))
+                        await conn.execute(f"DELETE FROM {music_table} WHERE video_id = ?", (video_id,))
                 # re index each pos
                 async with self.bot.pool.acquire() as conn:
-                    data = await conn.fetchall("SELECT pos FROM musiquesV3 ORDER BY pos")
+                    data = await conn.fetchall(f"SELECT pos FROM {music_table} ORDER BY pos")
                 for i, d in enumerate(data):
-                    await conn.execute("UPDATE musiquesV3 SET pos = ? WHERE pos = ?", (i+1, d[0]))
+                    await conn.execute(f"UPDATE {music_table} SET pos = ? WHERE pos = ?", (i+1, d[0]))
                 try:
                     await ctx.message.add_reaction("\u2705")
                 except discord.errors.NotFound:
@@ -2499,7 +2504,6 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
             video = await get_Video_from_input(from_web, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
             if isinstance(video, discord.ui.View):
                 return await ctx.send(embed=create_embed(title="Musique", description="Choisis une musique dans la liste.", suggestions=["play","play-next","mlist"]), view=video)
-            LogErrorInWebhook(f"Searching for `https://www.youtube.com/watch?v={video.video_id}`")
             _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
             if len(_track) > 0:
                 try:
@@ -2518,7 +2522,7 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
             if random_nb > 50:
                 return await ctx.reply(embed=create_embed(title="Erreur", description="Le nombre de musiques aléatoires ne peut pas être supérieur à 50."))
             async with ctx.bot.pool.acquire() as conn:
-                data = await conn.fetchall("SELECT * FROM musiquesV3")
+                data = await conn.fetchall(f"SELECT * FROM {music_table}")
             tracks = []
             random.shuffle(data)
             for i, track in enumerate(data):
