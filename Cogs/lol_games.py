@@ -536,18 +536,20 @@ class LolGames(commands.Cog):
                 FONT = LOL_FONT
                 img = Image.open(LOL_IMAGE_ARENA)
                 draw = ImageDraw.Draw(img)
+
                 # draw player name
-                draw_text(draw, player["riotIdGameName"], (53, 79), (0, 40), ImageFont.truetype(FONT, 22), "white")
+                if player["riotIdGameName"]:
+                    draw_text(draw, player["riotIdGameName"], (53, 79), (0, 40), ImageFont.truetype(FONT, 22), "white")
 
                 # draw kda
-                draw_text(draw, f"{player['kills']}/{player['deaths']}/{player['assists']}", (385, 80), (0, 40), ImageFont.truetype(FONT, 22), "white")
-
-                # draw kda ratio
-                ratio = round((player["kills"] + player["assists"]) / max(1, player["deaths"]), 2)
-                draw_text(draw, f"{ratio} KDA", (375, 80+38), (0, 40), ImageFont.truetype(FONT, 22), "white")
+                if player["kills"] and player["deaths"] and player["assists"]:
+                    draw_text(draw, f"{player['kills']}/{player['deaths']}/{player['assists']}", (385, 80), (0, 40), ImageFont.truetype(FONT, 22), "white")
+                    ratio = round((player["kills"] + player["assists"]) / max(1, player["deaths"]), 2)
+                    draw_text(draw, f"{ratio} KDA", (375, 80+38), (0, 40), ImageFont.truetype(FONT, 22), "white")
 
                 # draw damage dealt
-                draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])} DMG", (355, 80+76), (0, 40), ImageFont.truetype(FONT, 22), "white")
+                if player["dmg_dealt"]:
+                    draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])} DMG", (355, 80+76), (0, 40), ImageFont.truetype(FONT, 22), "white")
 
                 # draw position
                 position_data = {
@@ -562,10 +564,13 @@ class LolGames(commands.Cog):
                 }
                 pos = max(1, min(player["PlayerScore0"], 8))
                 color, suffix = position_data[pos]
-                draw_text(draw, f"{player['PlayerScore0']}{suffix}", (103, 268), (0, 40), ImageFont.truetype(FONT, 48), color)
+                if player["PlayerScore0"]:
+                    draw_text(draw, f"{player['PlayerScore0']}{suffix}", (103, 268), (0, 40), ImageFont.truetype(FONT, 48), color)
 
                 # draw items
                 for i, item in enumerate(player["items"]):
+                    if not item:
+                        continue
                     item = item.convert("RGBA")
                     if i == 6:
                         item = add_corners(item, 35)
@@ -578,15 +583,17 @@ class LolGames(commands.Cog):
                         img.paste(item, (335 + 47 * (i-4)+46, 281), item)
 
                 # draw champion icon
-                player["championIcon"] = player["championIcon"].convert("RGBA")
-                player["championIcon"] = add_corners(player["championIcon"], 15)
-                player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
-                img.paste(player["championIcon"], (57, 141), player["championIcon"])
+                if player["championIcon"]:
+                    player["championIcon"] = player["championIcon"].convert("RGBA")
+                    player["championIcon"] = add_corners(player["championIcon"], 15)
+                    player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
+                    img.paste(player["championIcon"], (57, 141), player["championIcon"])
 
-                player["mate_championIcon"] = player["mate_championIcon"].convert("RGBA")
-                player["mate_championIcon"] = add_corners(player["mate_championIcon"], 15)
-                player["mate_championIcon"] = player["mate_championIcon"].resize((55, 55), Image.LANCZOS)
-                img.paste(player["mate_championIcon"], (179, 187), player["mate_championIcon"])
+                if player["mate_championIcon"]:
+                    player["mate_championIcon"] = player["mate_championIcon"].convert("RGBA")
+                    player["mate_championIcon"] = add_corners(player["mate_championIcon"], 15)
+                    player["mate_championIcon"] = player["mate_championIcon"].resize((55, 55), Image.LANCZOS)
+                    img.paste(player["mate_championIcon"], (179, 187), player["mate_championIcon"])
 
                 # save image
                 fp = io.BytesIO()
