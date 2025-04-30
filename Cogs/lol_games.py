@@ -861,7 +861,7 @@ class LolGames(commands.Cog):
                     base_gain = base_gain * 0.5
                     text_data += "- Early FF: Gain divisés par deux !\n"
 
-                return base_gain, text_data, game_data['summonerName'], texte_to_send
+                return base_gain, text_data, game_data['riotIdGameName'], texte_to_send
             
             async def getRuneIcon(runeId: int, api_version: str) -> str:
                 RUNES_BASE_URL = 'http://ddragon.leagueoflegends.com/cdn/img/'
@@ -910,7 +910,7 @@ class LolGames(commands.Cog):
                 return Image.open(io.BytesIO(champion_icon_data)).convert("RGBA")
             
             async def get_drawing_data(game_data, game_duartion, userid, queuetype, raw_data, puuid, region, api_version):
-                pseudo = game_data["summonerName"]
+                pseudo = game_data["riotIdGameName"]
                 rank = await get_user_rank(puuid, region)
 
                 if game_data["win"] == True:
@@ -965,7 +965,7 @@ class LolGames(commands.Cog):
                         items.append(await getItemIcon(participant[f"item{i}"], api_version))
 
                     player["items"] = items
-                    player["pseudo"] = participant["summonerName"]
+                    player["pseudo"] = participant["riotIdGameName"]
                     player["rank"] = await get_user_rank(participant["puuid"], raw_data["metadata"]["matchId"].split("_")[0].lower())
                     player["championIcon"] = await getChampionIconByID(participant["championId"], api_version)
                     player["lvl"] = participant["champLevel"]
