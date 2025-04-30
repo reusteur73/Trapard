@@ -445,6 +445,7 @@ class Tasks(commands.Cog):
                                         await channel.send(embed=embed, file=file)
                                     else:
                                         await channel.send(embed=embed)
+                                await handler.save(idx, texte, titre, cat)
                                 nums_found += pattern.findall(texte)
                                 sent += 1
 
