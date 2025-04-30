@@ -904,7 +904,7 @@ def afficher_grille_sudoku(grille):
     return '\n'.join(lignes)
 
 async def get_rule34_data(session: ClientSession):
-    driver = uc.Chrome(driver_executable_path=f"{R34_FOLDER}chromedriver_r34", headless=True, version_main=112)
+    driver = uc.Chrome(driver_executable_path=f"{R34_FOLDER}chromedriver_126", browser_executable_path="/usr/bin/chromium-browser", headless=True, version_main=126)
     driver.get("https://rule34.xxx/index.php?page=post&s=random")
     img = driver.find_element(By.XPATH, "/html/body/div[5]/div/div[2]/div[1]/div[2]/div[1]/img")
     img_source = img.get_attribute('src')
@@ -922,6 +922,7 @@ async def get_rule34_data(session: ClientSession):
     async with session.get(img_source, ssl=False) as response:
         response.raise_for_status()
         data = await response.read()
+    driver.quit()
     im = Image.open(io.BytesIO(data))
     im.save(f"{R34_FOLDER}rule34.{found_ext}")
     return img_title, True, found_ext, img_source
