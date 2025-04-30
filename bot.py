@@ -90,7 +90,6 @@ class ServerUI:
                     view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
                     self.next_musics = [VideoDB.from_row(music.extras) for music in self.player.queue[:8]]
                     curent_timecode = int(current_time)
-                    print(f"{curent_timecode}/{self.track_duration}")
                     try:
                         await asyncio.to_thread(draw_music, self.guild_id, curent_timecode, self.video, self.next_musics)
                     except AttributeError:
@@ -140,7 +139,7 @@ class ServerUI:
                         duree = int(int(str(self.video.duree).split(".")[0]))
                     else:
                         duree = int(self.video.duree)
-                    if int(current_time) > (duree * 1.05):# If current time is 5% bigger than song time, cancel the task
+                    if int(current_time) > (duree * 1.02):# If current time is 2% bigger than song time, cancel the task
                         LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) has overplayed.")
                         try:
                             await self.stop()
