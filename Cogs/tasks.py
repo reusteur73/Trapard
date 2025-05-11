@@ -3,13 +3,14 @@ from .utils.data import interests_indexs, interests_infos
 from .utils.path import ANNONCE_AVATAR_PATH
 from asyncio import sleep
 from bs4 import BeautifulSoup
-import discord, time, datetime, json, re, asyncio
+import discord, time, datetime, json, re
 from io import BytesIO
 from PIL import Image
 from aiohttp import ClientSession
 from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
+from zoneinfo import ZoneInfo
 from asqlite import Pool
 
 APIKEY = getVar("CRYPTO_API")
@@ -127,6 +128,7 @@ class Tasks(commands.Cog):
         self.check_users_xp.start()
         self.rencontres_nc.start()
         self.informatique.start()
+        self.lol_patch_notes.start()
 
     @tasks.loop(minutes=1)
     async def update_status(self):
@@ -500,5 +502,34 @@ class Tasks(commands.Cog):
                             else:
                                 await channel.send(embed=embed)
                         await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
+
+    @tasks.loop(time=datetime.time(10, 0, 0, tzinfo=ZoneInfo("Europe/Paris")))
+    async def lol_patch_notes(self):
+        try:
+            url = 'https://www.leagueoflegends.com/fr-fr/news/tags/patch-notes/'
+            headers ={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+            async with self.bot.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    soup = BeautifulSoup(text, 'html.parser')
+                    titles = soup.find_all('div', {'data-testid': 'card-title'})
+                    last_title = titles[0].text.strip() if titles else None
+                    if titles:
+                        async with self.bot.pool.acquire() as conn:
+                            data = await conn.fetchone("SELECT value FROM PATCH_NOTES WHERE game = 'lol'")
+                        if data:
+                            last_title_db = data[0]
+                            if last_title_db.strip() != last_title.strip():
+                                await conn.execute("UPDATE PATCH_NOTES SET value = ? WHERE game = 'lol'", (last_title,))
+                                a_tag = titles[0].find_previous('a')
+                                if a_tag:
+                                    href = a_tag.get('href')
+                                    if href:
+                                        embed = create_embed(title="Patch notes LoL", description=f"<@&1044302003486077028>, nouveau patch notes LoL\n\n**{last_title}**\n\n[Voir le patch notes en entier](https://www.leagueoflegends.com{href})")
+                                        chann = self.bot.get_channel(1078804935996608584)
+                                        await chann.send(embed=embed)
+        except Exception as e:
+            LogErrorInWebhook(error=f"[LOL PATCH NOTES] {e}")
+
 async def setup(bot: Trapard):
     await bot.add_cog(Tasks(bot))
