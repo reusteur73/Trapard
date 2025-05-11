@@ -254,13 +254,6 @@ def parse_user_indexs(chaine: str):
     except:
         LogErrorInWebhook()
 
-def is_indexs(chaine: str):
-    """
-    check if a string is a list of indexs
-    """
-    ALLOWED = ["1","2","3","4","5","6","7","8","9","0", "*", '-', ","]
-    return all(char in ALLOWED for char in chaine)
-
 def create_progress_bar(current_time: int, total_time: int, bar_length=20):
     progress = current_time / total_time
     num_bar_filled = int(bar_length * progress)
@@ -1697,54 +1690,7 @@ class Music(commands.Cog):
     @app_commands.describe(keysearch = "Url Youtube ou texte de recherche.")
     async def download(self, interaction: commands.Context, *, keysearch: str):
         """Télécharger une musique, par url Youtube, ou par texte de recherche."""
-        try:
-            await command_counter(user_id=str(interaction.author.id), bot=self.bot)
-            if interaction.channel.name != "musique":
-                return await interaction.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
-            if is_url(keysearch):
-                if 'youtu.be' in keysearch:
-                    video_id = keysearch.split("youtu.be/")[1]
-                elif "v=" in keysearch:
-                    video_id = keysearch.split("v=")[1].split("&")[0]
-                else: 
-                    video_id = keysearch
-                video = await download(pool=self.bot.pool, session=self.bot.session, video_id=video_id, downloader=interaction.author.id)
-                return await interaction.send(f"La musique `{video.name}` (N°{video.pos}) a été ajoutée à la queue !")
-            else:
-                string = keysearch.strip()
-                results = YoutubeSearch(string, max_results=15).to_dict()
-                global videos
-                videos = {}
-                try:
-                    unique_titles = set()
-                    index = 0
-                    for result in results:
-                        if index == 5:
-                            break
-                        title, channel, id, durr = result["title"], result["channel"], result["id"], result["duration"]
-                        if title not in unique_titles:  # Check if the title is already present
-                            unique_titles.add(title)
-                            videos[f"video{index}"] = [title, channel, id, durr]
-                            index += 1
-                        else:
-                            print("SAME VALUE !!!!")
-                    descriptions = [
-                        f"Chaine: {videos[f'video{i}'][1]} | Durée: {videos[f'video{i}'][3]}"
-                        for i in range(5)
-                    ]
-                    options = [
-                        discord.SelectOption(label=videos[f'video{i}'][0], description=descriptions[i])
-                        for i in range(5)
-                    ]
-                    drop_down = DropDown(options=options, pool=self.bot.pool, session=self.bot.session, play_after=False, ctx=interaction, bot=self.bot)
-                    view = DropDownView(ctx=interaction)
-                    view.add_item(drop_down)
-                    await interaction.send(f"Résultat de la recherche `{string}`:", view=view)
-                except Exception as e:
-                    print(e)
-                    await interaction.send(f"Une erreur est survenue lors de la récupération des résultats. | Merci de réessayer. {e}", ephemeral=True)
-        except Exception as e:
-            LogErrorInWebhook()
+        return await interaction.send(embed=create_embed(title="Musique", description="Cette commande est obsolète, merci d'utiliser `/play music [nom ou url Youtube]` à la place."), ephemeral=True)
 
 # Music controler
     @commands.hybrid_command(name='skip', aliases=["next"]) # old: /skip
