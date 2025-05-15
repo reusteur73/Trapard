@@ -686,6 +686,9 @@ class LolGames(commands.Cog):
                 if region == "oc1": subdom = "sea"
                 else: subdom = "europe"
                 reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}?api_key={APIKEY}")
+                if reponse.status != 200:
+                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie : {reponse.status}")
+                    return None
 
                 data = await reponse.json()
                 
@@ -995,6 +998,11 @@ class LolGames(commands.Cog):
                             return True
                         return False
 
+            async def save_new_match(matchId: str, puuid: str):
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (matchId, puuid))
+
             async def task(data):
                 try:
                     trapcoins_emoji = "<:trapcoins:1108725845339672597>"
@@ -1013,7 +1021,12 @@ class LolGames(commands.Cog):
                                     mentions = "?"
                                     tier_bonus = 0
                                 api_version = await getLastVersion()
-                                match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
+                                try:
+                                    match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
+                                except TypeError:
+                                    save_new_match(last_match, puuid)
+                                    continue
+
                                 isStored = await check_if_stored(last_match)
                                 if not isStored:
                                     async with self.bot.pool.acquire() as conn:
@@ -1105,14 +1118,14 @@ class LolGames(commands.Cog):
                                     tier_bonus = 0
                                     pass
                                 try:
-                                    new_mastery_points = await Mastery.get_all_mastery(puuid = puuid, region = region, bot=self.bot)
-                                    last_mastery_points = await Mastery.get_champion_mastery(puuid = puuid, region = region, champion_id = match_data["championId"], bot=self.bot)
-                                    if new_mastery_points is not None:
-                                        await Mastery.update_user_mastery(new_mastery_points, self.bot)
-                                    for champ in new_mastery_points:
-                                        if champ["championId"] == match_data["championId"]:
-                                            new_champ_master = champ["championPoints"]
-                                            break
+                                    # new_mastery_points = await Mastery.get_all_mastery(puuid = puuid, region = region, bot=self.bot)
+                                    # last_mastery_points = await Mastery.get_champion_mastery(puuid = puuid, region = region, champion_id = match_data["championId"], bot=self.bot)
+                                    # if new_mastery_points is not None:
+                                    #     await Mastery.update_user_mastery(new_mastery_points, self.bot)
+                                    # for champ in new_mastery_points:
+                                    #     if champ["championId"] == match_data["championId"]:
+                                    #         new_champ_master = champ["championPoints"]
+                                    #         break
                                     timestamp = game_creation / 1000
                                     dt = datetime.datetime.fromtimestamp(timestamp)
                                     text += f'\n- **Total game: {afficher_nombre_fr(gains)} {str(trapcoins_emoji)} gagnés**'
@@ -1131,15 +1144,11 @@ class LolGames(commands.Cog):
                                     else: _region = raw_data["info"]["platformId"].lower()
                                     await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
-                                    async with self.bot.pool.acquire() as conn:
-                                        async with conn.transaction():
-                                            await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                    await save_new_match(last_match, puuid)
                                     continue
                                 except:
                                     LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`")
-                                    async with self.bot.pool.acquire() as conn:
-                                        async with conn.transaction():
-                                            await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
+                                    await save_new_match(last_match, puuid)
                                     continue
                             
                 except Exception as e:
