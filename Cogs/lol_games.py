@@ -6,7 +6,7 @@ from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWeb
 from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA 
 from bot import Trapard
 
-def get_post_headers():
+def get_riot_api_headers():
     """Returns the headers for the HTTP request to the League of Legends API."""
     return {
         "Accept": "application/json",
@@ -27,7 +27,7 @@ async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
     """
     try:
         summoner_url = f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{ign}/{gameTag}"
-        async with bot.session.get(summoner_url, headers=get_post_headers()) as summoner_response:
+        async with bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
             summoner_data = await summoner_response.json()
         if "puuid" not in summoner_data:
             print(summoner_data, "No puuid", ign, gameTag, summoner_url)
@@ -45,7 +45,7 @@ class Mastery:
         try:
             if region == "euw": region += "1"
             summoner_url = f"https://{region}.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}"
-            async with bot.session.get(summoner_url, headers=get_post_headers()) as summoner_response:
+            async with bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
                 summoner_data = await summoner_response.json()
             return summoner_data
         except Exception as e:
@@ -646,7 +646,7 @@ class LolGames(commands.Cog):
                 if region != "euw1":
                     region = "oc1"
                 summoner_url = f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
-                async with self.bot.session.get(summoner_url, headers=get_post_headers()) as summoner_response:
+                async with self.bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
                     summoner_data = await summoner_response.json()
                     encryptedId = summoner_data["id"]
 
@@ -654,7 +654,7 @@ class LolGames(commands.Cog):
                 ranking_url = f"https://{region}.api.riotgames.com/lol/league/v4/entries/by-summoner/{encryptedId}"
                 if self.bot.debug:
                     print(ranking_url)
-                async with self.bot.session.get(ranking_url, headers=get_post_headers()) as ranking_response:
+                async with self.bot.session.get(ranking_url, headers=get_riot_api_headers()) as ranking_response:
                     ranking_data = await ranking_response.json()
                 ranks = []
                 for i in ranking_data:
@@ -669,7 +669,7 @@ class LolGames(commands.Cog):
             async def get_last_matchs(player_uuid, region):
                 if region == "oc1": subdom = "sea"
                 else: subdom = "europe"
-                resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2", headers=get_post_headers())
+                resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2", headers=get_riot_api_headers())
                 data = await resp.json()
                 try: return data[0]
                 except: return None
@@ -700,7 +700,7 @@ class LolGames(commands.Cog):
             async def get_match_data(matchid, player_uuid, region):
                 if region == "oc1": subdom = "sea"
                 else: subdom = "europe"
-                reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_post_headers())
+                reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_riot_api_headers())
                 if reponse.status != 200:
                     LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie : {reponse.status}")
                     return None
@@ -1303,9 +1303,9 @@ class LolGames(commands.Cog):
                     region = 'euw1'
                 url = f"https://{region}.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champ_id}"
                 print(url)
-                resp = await self.bot.session.get(url, headers=get_post_headers())
+                resp = await self.bot.session.get(url, headers=get_riot_api_headers())
                 api_response = await resp.json()
-                async with self.bot.session.get(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-puuid/{puuid}", headers=get_post_headers()) as response:
+                async with self.bot.session.get(f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-puuid/{puuid}", headers=get_riot_api_headers()) as response:
                     data = await response.json()
                     pseudo = data["gameName"]
                     game_tag = data["tagLine"]
@@ -1316,7 +1316,7 @@ class LolGames(commands.Cog):
                 async with self.bot.session.get(f'http://ddragon.leagueoflegends.com/cdn/{api_version}/img/champion/{champion_clean_name}.png', ssl=False) as response:
                     response.raise_for_status()
                     champion_icon_data = await response.read()
-                async with self.bot.session.get(f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}", headers=get_post_headers()) as response:
+                async with self.bot.session.get(f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}", headers=get_riot_api_headers()) as response:
                     data = await response.json()
                     summoner_icon = data["profileIconId"]
                 
