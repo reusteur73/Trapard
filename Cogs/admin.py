@@ -136,7 +136,7 @@ class Admin(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def pm(self, ctx: commands.Context, membre: discord.Member, *,message: str, ):
+    async def mp(self, ctx: commands.Context, membre: discord.Member, *,message: str, ):
         try:
             if ctx.author.id != 311013099719360512:
                 return await ctx.send("Vous n'êtes pas autorisé à utiliser cette commande.", ephemeral=True)
