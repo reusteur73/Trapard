@@ -320,7 +320,7 @@ class Trapard(commands.Bot):
             print("[P] Possible corrupted file:", payload.track.extras.name, payload.exception)
         except:
             print("[P] Possible corrupted file1:", payload.track.title, payload.exception)
-        await LogErrorInWebhook(f"Music {payload.track.title} has crashed.\n{payload.exception}")
+        LogErrorInWebhook(f"Music {payload.track.title} has crashed.\n{payload.exception}")
 
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
         # await asyncio.sleep(1)
