@@ -90,27 +90,24 @@ class TrapardeurV2:
         return f"userId: {self.userId}, vocalTime: {self.vocalTime}, messageSent: {self.messageSent}, commandSent: {self.commandSent}"
 
 def LogErrorInWebhook(error=""):
-    chunk1, chunk2, chunk3 = None, None, None
+    """Send error in webhook."""
     error_trace = traceback.format_exc()
-    if len(error_trace) >= 2000:
-        chunk1 = error_trace[:2000]
-        chunk2 = error_trace[2000:]
-        if len(chunk2) >= 2000:
-            chunk2 = chunk2[:2000]
-            chunk3 = chunk2[2000:]
-    else:
-        chunk1 = error_trace
+
+    max_len = 2000
+    chunks = [error_trace[i:i+max_len] for i in range(0, len(error_trace), max_len)]
+
+    description = error if error else chunks[0] if chunks else "Erreur générique"
+
     embed = discord.Embed(
         title=f'Erreur à {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
-        description=f"```yaml\n{chunk1}```",
+        description=f"```yaml\n{description}```"
     )
-    if chunk2:
-        embed.add_field(name="2:", value=f"```yaml\n{chunk2}```")
-    if chunk3:
-        embed.add_field(name="3:", value=f"```yaml\n{chunk3}```")
-    if error != "":
-        embed.add_field(name="Custom Message", value=f"```yaml\n{error}```")
-    embed.add_field(name="", value='<@311013099719360512>')
+
+    for i, chunk in enumerate(chunks[1:], start=2):
+        embed.add_field(name=f"Partie {i}:", value=f"```yaml\n{chunk}```", inline=False)
+
+    embed.add_field(name="\u200b", value='<@311013099719360512>', inline=False)
+
     asyncio.create_task(run_async_webhook_error(embed=embed))
 
 async def run_async_webhook_error(embed: discord.Embed):
