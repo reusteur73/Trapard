@@ -2395,11 +2395,14 @@ async def handle_sb(ctx: commands.Context, bot, userId: int=None):
 async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'all'], from_web:str=None, from_mlist:str=None, random_nb:int=None):
     try:
         await command_counter(user_id=str(ctx.author.id), bot=ctx.bot)
-        if ctx.channel.name != "musique":
-            return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
-        vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+        if ctx.channel.name != "musique": return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
+        
+        try: vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+        except AttributeError: return await ctx.send(embed=create_embed(title="Erreur", description="Tu n'es pas dans un channel vocal..."), ephemeral=True)
+        
         try: await ctx.message.add_reaction("\u2705")
         except discord.errors.NotFound: pass
+        
         if (_type == "next") or (_type == "music"):
             if from_mlist is not None:
                 from_web = from_mlist
