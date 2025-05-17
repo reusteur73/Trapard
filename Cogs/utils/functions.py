@@ -974,29 +974,32 @@ async def getMList(bot, userid:int=None):
             start_index = page * page_limit
             end_index = min(start_index + page_limit, len(data))
             for i in range(start_index, end_index):
-                music_info = data[str(i + 1)]
-                if len(music_info) == 4:
-                    artist = music_info[3]
-                else:
-                    artist = "Inconnu"
-                if artist in music_info[0]:
-                    music_info[0] = music_info[0].replace(artist, "")
-                time2 = convert_to_minutes_seconds(str(music_info[1]))
-                if str(time2).strip() == "0m 0":
-                    time2 = "N/A"
                 try:
-                    username = bot.unique_downloader_display_names[int(music_info[2])]
-                except:
-                    username = "Unknown"
-                if username == "FeskooDesLacs":
-                    username = "Feskoo"
-                line = f"{printFormat(str(i + 1), 4)}|{printFormat(music_info[0], 30)}|{printFormat(str(artist), 14)}|{printFormat(time2, 5)}|{printFormat(str(username), 12)}\n"
+                    music_info = data[str(i + 1)]
+                    if len(music_info) == 4:
+                        artist = music_info[3]
+                    else:
+                        artist = "Inconnu"
+                    if artist in music_info[0]:
+                        music_info[0] = music_info[0].replace(artist, "")
+                    time2 = convert_to_minutes_seconds(str(music_info[1]))
+                    if str(time2).strip() == "0m 0":
+                        time2 = "N/A"
+                    try:
+                        username = bot.unique_downloader_display_names[int(music_info[2])]
+                    except:
+                        username = "Unknown"
+                    if username == "FeskooDesLacs":
+                        username = "Feskoo"
+                    line = f"{printFormat(str(i + 1), 4)}|{printFormat(music_info[0], 30)}|{printFormat(str(artist), 14)}|{printFormat(time2, 5)}|{printFormat(str(username), 12)}\n"
 
-                if len(field) + len(line) > 1000:
-                    field += "```"
-                    embed.add_field(name="", value=field, inline=False)
-                    field = "```"
-                field += line
+                    if len(field) + len(line) > 1000:
+                        field += "```"
+                        embed.add_field(name="", value=field, inline=False)
+                        field = "```"
+                    field += line
+                except Exception as e:
+                    LogErrorInWebhook()
             if field.strip() != "```":
                 field += "```"
                 embed.add_field(name="", value=field, inline=False)
