@@ -702,7 +702,8 @@ class LolGames(commands.Cog):
                 else: subdom = "europe"
                 reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_riot_api_headers())
                 if reponse.status != 200:
-                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie : {reponse.status}")
+                    if reponse.status != 403: # Waiting brawl returning 403, remove this later
+                        LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie : {reponse.status}")
                     return None
 
                 data = await reponse.json()
