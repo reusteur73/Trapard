@@ -718,22 +718,20 @@ class MusicList_Handler():
             return None, None
 
     async def find_song_by_name(self, name: str):
-
-        """
-        return list of music name, index by a part name
-        """
-        t = f"Les trouvailles pour la recherche `{name}`:\n\n"
+        """return dict of music name, index by a part name"""
+        output = {}
         async with self.bot.pool.acquire() as conn:
             data = await conn.fetchall(f"SELECT name, pos FROM {music_table}")
-            found = []
-            for item in data:
+            for i, item in enumerate(data):
                 if name.lower() in str(item[0]).lower():
-                    t += f'`{item[0]}` **N°{item[1]}**\n'
-                    found.append(item[0])
-        if t == f"Les trouvailles pour la recherche `{name}`:\n\n":
-            return f"Aucune musique portant ou contenant le texte {name} n'a été trouvée.😭", found
-        return t, found
-
+                    output[i] = {"index": item[1], "name": item[0]}
+        if len(output) == 0:
+            t = f"Aucune musique trouvée pour la recherche `{name}`."
+        elif len(output) == 1:
+            t = f"Une seule musique trouvée pour la recherche `{name}`:"
+        else:
+            t = f"Les trouvailles pour la recherche `{name}`:"
+        return t, output
 
     async def get_next_index(self):
         """
@@ -796,51 +794,6 @@ class MusicList_Handler():
                     index, _ = await self.get_index_by_music_name(musique.strip())
                     data.append(index)
         return data
-
-class SuggestionPlay(discord.ui.View):
-    def __init__(self, server_id, ctx: commands.Context, bot,music_list_handler: MusicList_Handler, index_list: list=None, index: int=None):
-        super().__init__(timeout=None)
-        self.bot = bot
-        if index:
-            self.index = index
-        elif index_list:
-            self.index_list = index_list
-        self.serverid = server_id
-        self.ctx = ctx
-        self.music_list_handler = music_list_handler
-
-        if index:
-            self.playnext_btn = discord.ui.Button(style=discord.ButtonStyle.green, label=f'play-next {self.index}', custom_id=f"playnext_{index}", disabled=False)
-            self.add_item(self.playnext_btn)
-            self.playnext_btn.callback = lambda interaction=self.ctx, button=self.playnext_btn: self.on_button_click(interaction, button, index=self.index)
-        
-        elif index_list:
-            for index in index_list:
-                self.playnext_btn = discord.ui.Button(style=discord.ButtonStyle.green, label=f'play-next {index}', custom_id=f"playnext_{index}", disabled=False)
-                self.add_item(self.playnext_btn)
-                self.playnext_btn.callback = lambda interaction=self.ctx, button=self.playnext_btn: self.on_button_click(interaction, button, index=index)            
-
-    async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button, index):
-        try:
-            try:await interaction.response.defer()
-            except:pass
-            _, name = button.custom_id.split("_")
-            if interaction.guild.voice_client: vc: wavelink.Player = interaction.guild.voice_client
-            else: vc: wavelink.Player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
-            track = await wavelink.Playable.search(f"{MUSICS_FOLDER}{name}.mp3", source=None)
-            if len(track) > 0:
-                index, downloader = await self.music_list_handler.get_index_by_music_name(name)
-                duration = await self.music_list_handler.get_song_duration_by_index(str(index))
-                track[0].extras = {"_downloader": downloader, "_index": index, "_name": name, "_duration": duration, "_txt_chann": interaction.channel.id}
-                await vc.queue.put_wait(track)
-                if not vc.playing:
-                    await vc.play(vc.queue.get(), volume=100)
-                embed = create_embed(title="Musique", description=f"`{name}` ajouté à la queue.", suggestions=["queue","mlist","playlist-play"])
-                await interaction.followup.send(embed=embed)
-            return
-        except Exception as e:
-            print(e)
-            LogErrorInWebhook()
 
 class QueueBtnV2(discord.ui.View): # Queue List Buttons
     try:
@@ -1561,6 +1514,11 @@ class Music(commands.Cog):
         return output_musics
 
 # PLAY GROUP
+    @commands.command(name="pm")
+    async def pm(self, ctx: commands.Context, keysearch: str):
+        """Joue une ou plusieurs musique(s)."""
+        return await handle_play(ctx=ctx, _type="music", from_web=keysearch)
+    
     @commands.hybrid_group(name="play")
     async def play1(self, ctx: commands.Context): pass
 
@@ -1821,8 +1779,8 @@ class Music(commands.Cog):
             LogErrorInWebhook()
 #End music controler
     
-    @commands.hybrid_command(name='is-song', aliases=["find"]) #old: /is-song
-    @app_commands.describe(nom= "Nom de la musique à chercher. Cela peut-être une partie du nom. Minimum 3 caractères")
+    @commands.hybrid_command(name='is-song', aliases=["find"])
+    @app_commands.describe(nom="Nom de la musique à chercher. Cela peut-être une partie du nom. Minimum 3 caractères")
     async def is_song(self, interaction: commands.Context, nom: str):
         """Vérifier si une musique a déjà été téléchargée."""
         try:
@@ -1834,19 +1792,18 @@ class Music(commands.Cog):
             if ' ' in nom:
                 nom = nom.replace(' ', '')
             result, found = await self.music_list_handler.find_song_by_name(nom)
-            if len(found) <= 5:
-                if len(found) == 1:
-                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index=found[0], bot=self.bot, music_list_handler=self.music_list_handler)
-                else:
-                    suggestions = SuggestionPlay(server_id=interaction.guild.id, ctx=interaction, index_list=found, bot=self.bot, music_list_handler=self.music_list_handler)
-                embed = create_embed(title="Is-song", description=result, suggestions=["play", "mlist", "queue"])
-                return await interaction.send(embed=embed, view=suggestions)
+            embed = create_embed(title="Is-song", description=result)
+            for key, value in found.items():
+                embed.add_field(name=f"Musique n°{value['index']}", value=f"{str(value['name'])[:77]}", inline=False)
+            return await interaction.send(embed=embed)
+        except discord.HTTPException as http_err:
+            if http_err.code == 50035:
+                await interaction.send(embed=create_embed(title="Erreur", description="Le message est trop long, essayes de faire une recherche plus précise."), ephemeral=True)
             else:
-                embed = create_embed(title="Is-song", description=result, suggestions=["play", "mlist", "queue"])
-                return await interaction.send(embed=embed)
+                await interaction.send(embed=create_embed(title="Erreur", description="Une erreur est survenue lors de la recherche."), ephemeral=True)
         except Exception as e:
+            await interaction.send(embed=create_embed(title="Erreur", description=f"Une erreur est survenue lors de la recherche.\n```yaml\n{e}```"), ephemeral=True)
             LogErrorInWebhook()
-
 # Playlist
     @commands.hybrid_group()
     async def playlist(self, ctx: commands.Context):
