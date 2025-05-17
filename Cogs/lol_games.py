@@ -100,7 +100,7 @@ class LolGames(commands.Cog):
         self.bot = bot
         self.check_lol_games.start()
 
-    @tasks.loop(seconds=180)
+    @tasks.loop(seconds=300)
     async def check_lol_games(self):
         try:
             async with self.bot.pool.acquire() as conn:
