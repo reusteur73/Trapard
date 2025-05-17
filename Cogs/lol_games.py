@@ -670,7 +670,11 @@ class LolGames(commands.Cog):
                 if region == "oc1": subdom = "sea"
                 else: subdom = "europe"
                 resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2", headers=get_riot_api_headers())
-                data = await resp.json()
+                try: data = await resp.json()
+                except Exception:
+                    text = await resp.text()
+                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des dernières parties de {player_uuid} | réponse code : {resp.status} | réponse: {text}")
+                    return None
                 try: return data[0]
                 except: return None
 
