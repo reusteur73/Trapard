@@ -7,6 +7,14 @@ from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA
 from bot import Trapard
 
 async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
+    """Fetches the PUUID of a League of Legends summoner using their in-game name and game tag.
+        gameTag (str): The game tag associated with the summoner.
+        bot (Trapard): The bot instance containing the HTTP session.
+    Returns:
+        str or None: The PUUID of the summoner if found, otherwise None.
+    Raises:
+        Logs exceptions internally and returns None if an error occurs during the request or response parsing.
+    """
     try:
         summoner_url = f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{ign}/{gameTag}?api_key={getVar('RIOT_API')}"
         async with bot.session.get(summoner_url) as summoner_response:
@@ -17,7 +25,6 @@ async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
         return summoner_data["puuid"]
     except Exception as e:
         LogErrorInWebhook(error=f"[GET PUUID BY NAME] {e} NAME={ign}, response = {summoner_data}, url = {summoner_url}")
-
         return None
 
 class Mastery:
