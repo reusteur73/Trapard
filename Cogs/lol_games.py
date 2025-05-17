@@ -1024,7 +1024,7 @@ class LolGames(commands.Cog):
                                 try:
                                     match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
                                 except TypeError:
-                                    save_new_match(last_match, puuid)
+                                    await save_new_match(last_match, puuid)
                                     continue
 
                                 isStored = await check_if_stored(last_match)
