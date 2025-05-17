@@ -6,6 +6,16 @@ from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWeb
 from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA 
 from bot import Trapard
 
+def get_post_headers():
+    """Returns the headers for the HTTP request to the League of Legends API."""
+    return {
+        "Accept": "application/json",
+        "Accept-Language": "fr,fr-FR;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Accept-Charset": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Content-Type": "application/json",
+        "X-Riot-Token": getVar("RIOT_API")
+    }
+
 async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
     """Fetches the PUUID of a League of Legends summoner using their in-game name and game tag.
         gameTag (str): The game tag associated with the summoner.
