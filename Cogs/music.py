@@ -499,9 +499,6 @@ def get_all_playlists_names():
     except Exception as e:
         LogErrorInWebhook()
 
-class Url:
-    url: str
-
 class get_artist_from_title():
     def __init__(self, title: str, bot):
         self.bot = bot
@@ -935,7 +932,7 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
             try: await interaction.response.defer()
             except: pass
             if button.custom_id == "afficher_queue":
-                messages = await getMusicQueue(self.serverid, bot=self.bot)
+                messages = await getMusicQueue(self.serverid, bot=self.bot, music_list_handler=MusicList_Handler(bot=self.bot))
                 queue_view = QueueBtnV2(messages, len(messages), ctx=self.ctx)
                 await interaction.channel.send(embed=messages[0], view=queue_view)
                 view = PlayAllViewV2(interaction.guild_id, interaction, self.bot)
@@ -983,7 +980,7 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                 if interaction.guild.id in self.bot.server_music_session:
                     played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[interaction.guild.id]['time']))
                     embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
-                else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
+                else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.")
                 await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
                 if self.player.guild.id in self.bot.server_music_session:
                     self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
@@ -996,10 +993,10 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                             # check if the song is already liked
                             for song in result:
                                 if song[2] == songData.video_id:
-                                    embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.", suggestions=["mlist","play", "search"])
+                                    embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.")
                                     return await interaction.followup.send(embed=embed)
                         await conn.execute("INSERT INTO LikedSongsV2 (userId, songId, songName) VALUES (?, ?, ?)", (int(interaction.user.id), str(songData.video_id), str(songData.name)))
-                        embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{songData.name}` a été ajoutée à tes musiques likées.", suggestions=["mlist","play", "search"])
+                        embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{songData.name}` a été ajoutée à tes musiques likées.")
                     return await interaction.followup.send(embed=embed)
             elif button.custom_id == "prev":
                 pass
@@ -1007,11 +1004,18 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                 if self.player.autoplay.name == "enabled":
                     self.player.autoplay = AutoPlayMode.disabled
                     self.sb_btn.label = "AutoPlay Off"
+                    texte = f"AutoPlay est maintenant désactivé uniquement les musiques de la queue seront jouées !"
                     self.sb_btn.style = discord.ButtonStyle.red
                 else:
                     self.player.autoplay = AutoPlayMode.enabled
                     self.sb_btn.label = "AutoPlay On"
+                    texte = f"AutoPlay est maintenant activé selon les recommandations Youtube !"
                     self.sb_btn.style = discord.ButtonStyle.green
+                try:
+                    await interaction.channel.send(embed=create_embed(title="Musique", description=texte))
+                    await interaction.edit_original_response(view=self)
+                except discord.errors.NotFound:
+                    return await interaction.followup.send(view=self)
             return
         async def on_timeout(self):
             try: return await self.ctx.edit_original_response(view=None)
@@ -1094,7 +1098,10 @@ class DropDown(discord.ui.Select):
                         if not vc.playing:
                             await vc.play(vc.queue.get(), volume=100)
                         embed = create_embed(title="Musique", description=f"La musique `{video.name}` (N°{video.pos}) a été ajoutée à la queue par <@{interaction.user.id}> ! 🦈", suggestions=["queue","mlist","playlist-play"])
-                        return await response.edit(embed=embed)
+                        await response.edit(embed=embed)
+                        try: await interaction.delete_original_response()
+                        except discord.errors.NotFound: pass
+                        return 
                 except Exception as e:
                     LogErrorInWebhook()
             return await response.edit(embed=create_embed("Musique",f"La musique `{video.name}` (N°{video.pos}) a été téléchargée avec succès ! 🦈"))
@@ -1676,14 +1683,20 @@ class Music(commands.Cog):
                     name = next_track_data['name']
                     cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
             else:
-                return await player.skip(force=True)
-            await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
+                cur_track = f"`{player.current}` (**autoplay**) a été passé par "
+                name = None
+                await player.skip(force=True)
+            
+            if name is not None:
+                await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
+
             if ctx.guild.id in self.bot.server_music_session:
                 self.bot.server_music_session[ctx.guild.id]['nb'] +=  1
-            try:
-                self.bot.locks[ctx.guild.id].release()
-            except RuntimeError:
-                pass
+            if ctx.guild.id in self.bot.locks and self.bot.locks[ctx.guild.id].locked():
+                try:
+                    self.bot.locks[ctx.guild.id].release()
+                except RuntimeError:
+                    pass
             try:
                 await ctx.message.add_reaction("\u2705")
             except discord.errors.NotFound:
