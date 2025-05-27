@@ -15,8 +15,9 @@ from aiohttp import ClientSession
 
 music_table = "musiquesV3"
 
-async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False):
-    
+async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False) -> VideoDB | None:
+    if is_autoplay:
+        music_table = "autoplay"
     async def save_to_db(video: VideoDB, dler:int, pool:Pool, index:int):
         async with pool.acquire() as conn:
             async with conn.transaction():
@@ -66,8 +67,7 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
             likes=likes, views=views, video_id=_id
         )
 
-        if not is_autoplay:
-            await save_to_db(v, dler, pool, index=i)
+        await save_to_db(v, dler, pool, index=i)
 
         return v
 
@@ -89,24 +89,20 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
         return "https://www.example.com/default-avatar.jpg"
 
     # First of all check if the video is already in the db
-    if not is_autoplay:
-        async with pool.acquire() as conn:
-            data = await conn.fetchone(f"SELECT * FROM {music_table} WHERE video_id = ?", (video_id,))
-        if data:
-            data_list = list(data)
-            if 'debian' in str(data_list[6]):
-                data_list[6] = str(data_list[6]).replace("debian", "dreus")
-            if 'debian' in str(data_list[7]):
-                data_list[7] = str(data_list[7]).replace("debian", "dreus")
-            return VideoDB(id=data_list[0], pos=data_list[1], duree=data_list[2], name=data_list[3], artiste=data_list[4], downloader=data_list[5], thumbnail=data_list[6], channel_avatar=data_list[7], likes=data_list[8], views=data_list[9], video_id=data_list[10])
-        next_index = await get_next_index(pool)
-        video = await get_info(video_id, downloader, next_index)
+    async with pool.acquire() as conn:
+        data = await conn.fetchone(f"SELECT * FROM {music_table} WHERE video_id = ?", (video_id,))
+    if data:
+        data_list = list(data)
+        if 'debian' in str(data_list[6]):
+            data_list[6] = str(data_list[6]).replace("debian", "dreus")
+        if 'debian' in str(data_list[7]):
+            data_list[7] = str(data_list[7]).replace("debian", "dreus")
+        return VideoDB(id=data_list[0], pos=data_list[1], duree=data_list[2], name=data_list[3], artiste=data_list[4], downloader=data_list[5], thumbnail=data_list[6], channel_avatar=data_list[7], likes=data_list[8], views=data_list[9], video_id=data_list[10])
+    next_index = await get_next_index(pool)
+    video = await get_info(video_id, downloader, next_index)
+    if isinstance(video, VideoDB):
         return video
-    else:
-        next_index = await get_next_index(pool)
-        if next_index is None: next_index = 1
-        video = await get_info(video_id, downloader, next_index)
-        return video
+    return None
 
 async def get_thumb(session: ClientSession, video_id:str):
     url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
@@ -362,8 +358,6 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
         views = video.views
         artiste = video.artiste
 
-
-
     pbar_percent = current_track_time * 100 / int(duree)
     img = Image.open(f"{PATH}/new_yt.png")
     draw = ImageDraw.Draw(img)
@@ -387,8 +381,15 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
     draw_text(draw, f"{display_big_nums(views)} vues", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
     for i, _video in enumerate(next_musics):
-        _, _thumbnail = _video.thumbnail
-        _, _name = _video.name
+        try:
+            _, _thumbnail = _video.thumbnail
+            _, _name = _video.name
+        except TypeError:
+            _thumbnail = _video.thumbnail
+            _name = _video.name
+        except ValueError:
+            _thumbnail = _video.thumbnail
+            _name = _video.name
         if i == 8:
             break
         thumb = Image.open(_thumbnail).convert("RGBA")
@@ -398,14 +399,15 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
 
         draw_textV2(draw, _name, (1610, 200 + 125 * i), (285, 100), ImageFont.truetype(FONT, 28), "white")
 
-
     controls = Image.open(f"{PATH}/bottom_controls.png").convert("RGBA")
     img.paste(controls, (30, 755), controls)
 
     if ended:
         pbar_percent = 100
         draw_text(draw, f"{minutes_to_time(int(duree))} / {minutes_to_time(int(duree))}", (355, 792), (0, 40), ImageFont.truetype(FONT, 30), "white")
+        path = f"{PATH}/{serverid}_end_music_player.png"
     else:
+        path = f"{PATH}/{serverid}_music_player.png"
         draw_text(draw, f"{minutes_to_time(current_track_time)} / {minutes_to_time(int(duree))}", (355, 792), (0, 40), ImageFont.truetype(FONT, 30), "white")
 
     MAX = 1377
@@ -421,8 +423,7 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
 
     fp = io.BytesIO()
     img.convert("RGBA").save(fp, "PNG")
-    img.save(f"{PATH}/{serverid}_music_player.png")
-    return
+    img.save(path)
 
 def getVideoId(title):
     try:
@@ -1682,21 +1683,19 @@ class Music(commands.Cog):
                     next_track_data = dict(next_track.extras)
                     name = next_track_data['name']
                     cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
+                await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
             else:
                 cur_track = f"`{player.current}` (**autoplay**) a été passé par "
                 name = None
                 await player.skip(force=True)
             
-            if name is not None:
-                await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
-
             if ctx.guild.id in self.bot.server_music_session:
                 self.bot.server_music_session[ctx.guild.id]['nb'] +=  1
-            if ctx.guild.id in self.bot.locks and self.bot.locks[ctx.guild.id].locked():
-                try:
-                    self.bot.locks[ctx.guild.id].release()
-                except RuntimeError:
-                    pass
+            # if ctx.guild.id in self.bot.ui_V2 and self.bot.ui_V2[ctx.guild.id]:
+            #     try:
+            #         self.bot.locks[ctx.guild.id].release()
+            #     except RuntimeError:
+            #         pass
             try:
                 await ctx.message.add_reaction("\u2705")
             except discord.errors.NotFound:
