@@ -18,6 +18,8 @@ music_table = "musiquesV3"
 async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False) -> VideoDB | None:
     if is_autoplay:
         music_table = "autoplay"
+    else:
+        music_table = "musiquesV3"
     async def save_to_db(video: VideoDB, dler:int, pool:Pool, index:int):
         async with pool.acquire() as conn:
             async with conn.transaction():
@@ -446,7 +448,8 @@ async def storeSkippedSong(pool: Pool, songname: str, userid:str):
                     await conn.execute("UPDATE SkippedSongs SET count = ? WHERE songName = ? AND userId = ?", (data[3] + 1, songname, userid,))
                     return True
     except Exception as e:
-        LogErrorInWebhook()
+        # LogErrorInWebhook()
+        return False
 
 async def FavSongsDbHandler(pool: Pool, song_name, user_id):
     """Count the number of time a song is played by a user and add it to the db."""
@@ -965,9 +968,11 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                         embed = create_embed(title="Musique", description=f"La musique `{track.title}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
                     await interaction.followup.send(embed=embed)
                     try:
-                        return await storeSkippedSong(pool=self.bot.pool, songname=data['name'], userid=str(interaction.user.id))
+                        await storeSkippedSong(pool=self.bot.pool, songname=data['name'], userid=str(interaction.user.id))
+                        return
                     except KeyError:
-                        return await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
+                        await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
+                        return 
             elif button.custom_id == "disconnect":
                 await self.player.disconnect()
                 self.player.queue.clear()
@@ -1672,22 +1677,26 @@ class Music(commands.Cog):
             player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
             if not player:
                 return
-            current_data = dict(player.current.extras)
-            if current_data:
-                if position is None:
-                    cur_track = f"`{current_data['name']}` (**{current_data['pos']}**) a été passé par "
-                    name = current_data['name']
-                    await player.skip(force=True)
+            if player.current is not None:
+                current_data = dict(player.current.extras)
+                if current_data:
+                    if position is None:
+                        cur_track = f"`{current_data['name']}` (**{current_data['pos']}**) a été passé par "
+                        name = current_data['name']
+                        await player.skip(force=True)
+                    else:
+                        next_track = player.queue.get_at(position - 1)
+                        next_track_data = dict(next_track.extras)
+                        name = next_track_data['name']
+                        cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
+                    await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
                 else:
-                    next_track = player.queue.get_at(position - 1)
-                    next_track_data = dict(next_track.extras)
-                    name = next_track_data['name']
-                    cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
-                await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
+                    cur_track = f"`{player.current}` (**autoplay**) a été passé par "
+                    name = None
+                    await player.skip(force=True)
             else:
-                cur_track = f"`{player.current}` (**autoplay**) a été passé par "
-                name = None
-                await player.skip(force=True)
+                embed = create_embed(title="Erreur", description="Il n'y a pas de musique en cours de lecture.")
+                return await ctx.send(embed=embed)
             
             if ctx.guild.id in self.bot.server_music_session:
                 self.bot.server_music_session[ctx.guild.id]['nb'] +=  1
@@ -1718,6 +1727,7 @@ class Music(commands.Cog):
                 if ctx.guild.id in self.bot.ui_V2:
                     await self.bot.ui_V2[ctx.guild.id].stop()
                     self.bot.ui_V2[ctx.guild.id].task.cancel()
+                    self.bot.ui_V2.pop(ctx.guild.id, None)	
             except Exception as e:
                 print("X02:", e)
                 pass

@@ -9,7 +9,7 @@ from typing import Dict, Optional, List, TYPE_CHECKING
 from Cogs.music import EndSessionBtn, PlayAllViewV2, draw_music, download
 from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler, VideoDB
 from Cogs.utils.data import FULL_EMOJIS_LIST
-from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats, getVar
+from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats, getVar, parse_name_tuple
 from Cogs.utils.path import DB_PATH, MAIN_DIR
 from asyncio import sleep
 from wavelink import Player
@@ -66,21 +66,21 @@ class ServerUI:
                 txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
             else:
                 txt_channel = discord.utils.get(self.player.guild.channels, name="musique", type=discord.ChannelType.text)
-                self.txt_channel_id = txt_channel.id
+            
             self.guild_id = txt_channel.guild.id
             if self.guild_id not in self.bot.server_music_session:
                 self.bot.server_music_session[self.guild_id] = {'time': 0, 'nb': 0}
-            try:
-                if not self._video:
-                    self.video = VideoDB.from_row(self.player.current.extras)
-                else:
-                    self.video = self._video
-            except Exception as e:
-                print("cant get video:", e)   
 
-            self.ui_message = await txt_channel.send(embed=create_embed(title="Musique", description=f"{self.video.name}", color=0x2F3136))
-            
-            while self.player.playing and self._running: 
+            if not self._video:
+                self.video = VideoDB.from_row(dict(self.player.current.extras))
+            else:
+                self.video = self._video
+
+            file = discord.File(f"{MAIN_DIR}/files/waiting.png", filename=f"Waiting.png")
+            self.ui_message = await txt_channel.send(embed=create_embed(title="Musique", description=f"{self.video.name}", color=0x2F3136).set_image(url=f"attachment://Waiting.png"), file=file)
+            iteration = 0
+            while self.player.playing and self._running:
+                iteration += 1
                 try:
                     loop_time = perf_counter()
                     current_time = perf_counter() - start_time
@@ -95,21 +95,21 @@ class ServerUI:
                         pass
                     except Exception as e:
                         traceback.print_exc()
-                    print(44)
                     file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_music_player.png", filename=f"Music.png")
-                    print(45)
-                    try:
-                        raw_txt = f"{self.video.name} ({self.video.pos})"
-                        pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
-                        match = re.search(pattern, raw_txt)
-                        if match:
-                            name = match.group(1)
-                            pos = match.group(2)
-                        else:
-                            name = self.video.name
-                        embed = discord.Embed(title=f"Musique {html.escape(name)} ({pos})", description=f" ", color=0x2F3136)
-                    except:
-                        embed = discord.Embed(title=f"Musique {html.unescape(self.video.name)} (autoplay)", description=f" ", color=0x2F3136)
+                    
+                    print(f"{self.video.name} ({self.video.pos})")
+                    parsed = parse_name_tuple(f"{self.video.name} ({self.video.pos})")
+                    if self.track_index is not None:
+                        if parsed is True:
+                            title = f"Musique {html.unescape(self.video.name)} ({self.video.pos})"
+                        elif parsed is False:
+                            title = f"Musique {html.escape(self.video.name)} (autoplay)"
+                        elif isinstance(parsed, list):
+                            title = f"Musique {parsed[0]} ({parsed[1]})"
+                    else:
+                        title = f"Musique {html.unescape(self.video.name)} (autoplay)"
+                    embed = discord.Embed(title=title, description=f" ", color=0x2F3136)
+
                     embed.set_image(url=f"attachment://Music.png")
                     try: # check if the message is still the last message in the channel
                         try:
@@ -149,11 +149,11 @@ class ServerUI:
                             return
                     if self.ui_message is not None:
                         if self.ui_message.edited_at is not None:
-                            sleep_time = (self.ui_message.edited_at + datetime.timedelta(seconds=10) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+                            sleep_time = (self.ui_message.edited_at + datetime.timedelta(seconds=8.8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
                         elif self.ui_message.edited_at is None and self.ui_message.created_at is not None:
-                            sleep_time = (self.ui_message.created_at + datetime.timedelta(seconds=10) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+                            sleep_time = (self.ui_message.created_at + datetime.timedelta(seconds=8.8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
                     else:
-                        sleep_time = datetime.timedelta(seconds=10).total_seconds()
+                        sleep_time = datetime.timedelta(seconds=8.8).total_seconds()
 
                     await asyncio.sleep(max(0, sleep_time))
                 except Exception as e:
@@ -348,9 +348,16 @@ class Trapard(commands.Bot):
         track: wavelink.Playable = payload.track
         c_auto_queue = []
         guild_id = player.guild.id
+        max_retries = 100
         while guild_id in self.ui_V2:
+            max_retries -= 1
             await asyncio.sleep(0.1)
             print("[I] waiting for ui_V2 to be empty")
+            if max_retries <= 0:
+                await self.ui_V2[guild_id].stop()
+                self.ui_V2[guild_id].task.cancel()
+                self.ui_V2.pop(guild_id, None)	
+                break
         print(f"[I] track {track.identifier} started in guild {guild_id}")
         data = dict(track.extras)
         if data:
@@ -369,7 +376,7 @@ class Trapard(commands.Bot):
                 print(f"[I] track is from autoplay and his id is: {track.identifier}")
                 result = await download(pool=self.pool, session=self.session, video_id=track.identifier, downloader=1065781211219370104, is_autoplay=True)
                 if isinstance(result, VideoDB):
-                    music_task = ServerUI(bot=self, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=result.pos, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result, auto_queue=c_auto_queue)
+                    music_task = ServerUI(bot=self, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=None, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result, auto_queue=c_auto_queue)
                     music_task.task = asyncio.create_task(music_task.start())
                     print(f"task started for {result.name}")
                     self.ui_V2[guild_id] = music_task

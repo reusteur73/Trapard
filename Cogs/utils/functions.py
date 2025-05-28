@@ -5,6 +5,7 @@ from .path import JSON_DATA, G_STATS, R34_FOLDER, VARS
 from PIL import Image
 import undetected_chromedriver as uc
 import json, re, inspect, os, random, asqlite, io
+from html import escape as html_escape
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
@@ -1137,3 +1138,19 @@ async def get_next_index(pool):
         return int(data[0]) + 1
     return 1
 
+def parse_name_tuple(string: str):
+    """Parse a string that contains a name tuple and return the name and position as a list.
+        -    Returns True if the string does not contain a name tuple but is valid.
+        -    Returns False if the string is invalid. (come from autoplay)
+        -    Return [name, position] if the string contains a name tuple."""
+    try:
+        pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
+        match = re.search(pattern, string)
+        if match:
+            name = match.group(1)
+            pos = match.group(2)
+            return [html_escape(name), int(pos)]
+        else:
+            return True
+    except:
+        return False
