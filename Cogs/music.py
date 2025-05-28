@@ -980,12 +980,13 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                     if interaction.guild.id in self.bot.ui_V2:
                         await self.bot.ui_V2[interaction.guild.id].stop()
                         self.bot.ui_V2[interaction.guild.id].task.cancel()
+                        self.bot.ui_V2.pop(interaction.guild.id, None)
                 except Exception as e:
                     print("X02:", e)
                     pass
                 if interaction.guild.id in self.bot.server_music_session:
                     played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[interaction.guild.id]['time']))
-                    embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
+                    embed = create_embed(title="Musique", description=f"Bot déconnecté du vocal par <@{interaction.user.id}>\nJ'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
                 else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.")
                 await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
                 if self.player.guild.id in self.bot.server_music_session:
@@ -1324,6 +1325,32 @@ class SoundBoardDropDown(discord.ui.Select):
     except Exception as e:
         LogErrorInWebhook()
 
+class AlreadyDownloadedDropdown(discord.ui.Select):
+    def __init__(self, options_dl, _options, pool: Pool, session: ClientSession, ctx: commands.Context):
+        self.ctx = ctx
+        self.pool = pool
+        self.session = session
+        self._options = _options
+        super().__init__(
+            placeholder="Choisis une musique déjà téléchargée",
+            options=options_dl,
+            max_values=1,
+            min_values=1
+        )
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] != "new":
+            try: await interaction.response.defer()
+            except: pass
+            print("Playing already downloaded song")
+            await handle_play(ctx=self.ctx, _type="music", from_web=None, from_mlist=self.values[0])
+            await interaction.delete_original_response()
+        else:
+            print("Downloading new song")
+            drop_down = DropDown(options=self._options, pool=self.pool, session=self.session, play_after=True, ctx=self.ctx, bot=self.ctx.bot)
+            view = DropDownView()
+            view.add_item(drop_down)
+            await interaction.response.edit_message(embed=create_embed(title="Musique", description="Résultats de ta recherche :"), view=view)
+
 async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: SoundBoardManage , bot, ctx: commands.Context=None):
     """Download youtube video from url."""
     def check_file(name:str):
@@ -1469,16 +1496,52 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
                 discord.SelectOption(label=videos[f'video{i}'][0], description=descriptions[i])
                 for i in range(5)
             ]
-            drop_down = DropDown(options=options, pool=pool, session=session, play_after=True, ctx=ctx, bot=ctx.bot)
-            view = DropDownView()
-            view.add_item(drop_down)
-            return view
+            # Check if any of the 5 videos are already in the musiquesV3 table
+            already_downloaded = []
+            async with pool.acquire() as conn:
+                for i in range(5):
+                    vid_id = videos[f'video{i}'][2]
+                    data = await conn.fetchone(f"SELECT name, video_id, pos FROM musiquesV3 WHERE video_id = ?", (vid_id,))
+                    if data:
+                        already_downloaded.append({"index": i, "name": data[0], "video_id": data[1], "pos": data[2]})
+
+            if already_downloaded and len(already_downloaded) > 0:
+                print("Already downloaded songs found")
+                desc = "\n".join(
+                    [f"{i+1}. `{v['name']}` ([YouTube](https://www.youtube.com/watch?v={v['video_id']}))" for i, v in enumerate(already_downloaded)]
+                )
+                embed = create_embed(
+                    title="Déjà téléchargé ??",
+                    description=f"Parmi les résultat(s), {len(already_downloaded)} musique(s) sont/est déjà dans la Mlist :\n{desc}\n\nVeux-tu jouer l'une d'elle(s) ?\n- Si oui, la prochaine fois, utilise son index dans la Mlist pour la jouer directement 😉​",
+                )
+                options_dl = [
+                    discord.SelectOption(
+                        label=f"{v['name']}", 
+                        value=f"{v['pos']}", 
+                        description="Déjà téléchargée"
+                    ) for v in already_downloaded
+                ]
+                options_dl.append(discord.SelectOption(label="❌ Non je soushaite en télécharger une nouvelle ❌", value="new", description="Télécharger une nouvelle musique"))
+
+                drop_down = AlreadyDownloadedDropdown(options_dl=options_dl, _options=options, pool=pool, session=session, ctx=ctx)
+                view = DropDownView()
+                view.add_item(drop_down)
+                await ctx.channel.send(embed=embed, view=view)
+                return view
+            else:
+                print("No already downloaded songs found")
+                drop_down = DropDown(options=options, pool=pool, session=session, play_after=True, ctx=ctx, bot=ctx.bot)
+                view = DropDownView()
+                view.add_item(drop_down)
+                await ctx.channel.send(embed=create_embed(title="Musique", description=f"Résultats de la recherche `{string}` :"), view=view)
+                return view
+
         except Exception as e:
+            traceback.print_exc()
             LogErrorInWebhook()
-    return video
     #     _track: wavelink.Search = await wavelink.Playable.search(f"{from_web}")
     #     video = await download(pool=pool, session=session, video_id=_track[0].identifier, downloader=downloader)
-    # return video
+    return video
 
 playlist_data = []
 playlist_names = get_all_playlists_names()
@@ -1528,7 +1591,7 @@ class Music(commands.Cog):
 
 # PLAY GROUP
     @commands.command(name="pm")
-    async def pm(self, ctx: commands.Context, keysearch: str):
+    async def pm(self, ctx: commands.Context, *, keysearch: str):
         """Joue une ou plusieurs musique(s)."""
         return await handle_play(ctx=ctx, _type="music", from_web=keysearch)
     
@@ -2431,7 +2494,7 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
             vc.autoplay = wavelink.AutoPlayMode.enabled
             video = await get_Video_from_input(from_web, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
             if isinstance(video, discord.ui.View):
-                return await ctx.send(embed=create_embed(title="Musique", description="Choisis une musique dans la liste.", suggestions=["play","play-next","mlist"]), view=video)
+                return
             _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
             if len(_track) > 0:
                 try:
