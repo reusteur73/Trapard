@@ -1451,7 +1451,6 @@ async def download_from_urlV2(url, channel_id, userid, cmd, soundboard_manager: 
 async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session: ClientSession, ctx: commands.Context) -> VideoDB:
     """Handle user input to return video id."""
     if from_web.isdigit():
-        print("index")
         async with pool.acquire() as conn:
             data = await conn.fetchone(f"SELECT * FROM {music_table} WHERE pos = ?", (int(from_web),))
         if data is None:
@@ -1460,14 +1459,12 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
         video = VideoDB.from_row(data)
         from_web = video.video_id
     elif "http" in from_web: # youtube url try to get video id
-        print("url")
         if 'youtu.be' in from_web:
             from_web = from_web.split("youtu.be/")[1]
         elif "v=" in from_web:
             from_web = from_web.split("v=")[1].split("&")[0]
         video = await download(pool=pool, session=session, video_id=from_web, downloader=downloader)
     elif (len(from_web) == 11) and (not " " in from_web): # seems like an id
-        print("video_id")
         video = await download(pool=pool, session=session, video_id=from_web, downloader=downloader)
     else: # search for the video
         print("searching for", from_web)
@@ -1486,8 +1483,6 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
                     unique_titles.add(title)
                     videos[f"video{index}"] = [title, channel, id, durr]
                     index += 1
-                else:
-                    print("SAME VALUE !!!!")
             descriptions = [
                 f"Chaine: {videos[f'video{i}'][1]} | Durée: {videos[f'video{i}'][3]}"
                 for i in range(5)
@@ -1506,7 +1501,6 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
                         already_downloaded.append({"index": i, "name": data[0], "video_id": data[1], "pos": data[2]})
 
             if already_downloaded and len(already_downloaded) > 0:
-                print("Already downloaded songs found")
                 desc = "\n".join(
                     [f"{i+1}. `{v['name']}` ([YouTube](https://www.youtube.com/watch?v={v['video_id']}))" for i, v in enumerate(already_downloaded)]
                 )
@@ -1529,7 +1523,6 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
                 await ctx.channel.send(embed=embed, view=view)
                 return view
             else:
-                print("No already downloaded songs found")
                 drop_down = DropDown(options=options, pool=pool, session=session, play_after=True, ctx=ctx, bot=ctx.bot)
                 view = DropDownView()
                 view.add_item(drop_down)
@@ -1539,8 +1532,6 @@ async def get_Video_from_input(from_web: str,downloader: int, pool:Pool, session
         except Exception as e:
             traceback.print_exc()
             LogErrorInWebhook()
-    #     _track: wavelink.Search = await wavelink.Playable.search(f"{from_web}")
-    #     video = await download(pool=pool, session=session, video_id=_track[0].identifier, downloader=downloader)
     return video
 
 playlist_data = []

@@ -97,7 +97,6 @@ class ServerUI:
                         traceback.print_exc()
                     file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_music_player.png", filename=f"Music.png")
                     
-                    print(f"{self.video.name} ({self.video.pos})")
                     parsed = parse_name_tuple(f"{self.video.name} ({self.video.pos})")
                     if self.track_index is not None:
                         if parsed is True:
@@ -158,9 +157,7 @@ class ServerUI:
                     await asyncio.sleep(max(0, sleep_time))
                 except Exception as e:
                     traceback.print_exc()
-                    print("\n"*3)
                     await sleep(3)
-            print(5)
             return
         except Exception as e:
             print("Music UI start error:", e)
@@ -348,24 +345,20 @@ class Trapard(commands.Bot):
         track: wavelink.Playable = payload.track
         c_auto_queue = []
         guild_id = player.guild.id
-        max_retries = 100
+        max_retries = 150
         while guild_id in self.ui_V2:
             max_retries -= 1
             await asyncio.sleep(0.1)
-            print("[I] waiting for ui_V2 to be empty")
             if max_retries <= 0:
                 await self.ui_V2[guild_id].stop()
                 self.ui_V2[guild_id].task.cancel()
                 self.ui_V2.pop(guild_id, None)	
                 break
-        print(f"[I] track {track.identifier} started in guild {guild_id}")
         data = dict(track.extras)
         if data:
-            print(f"[+] track {data['name']}\n")
             try:
                 music_task = ServerUI(bot=self, player=player, downloader_id=data['downloader'], track_name=data['name'], track_index=data['pos'], track_duration=data['duree'], txt_channel_id=data['txt_channel_id'], auto_queue=c_auto_queue)
                 music_task.task = asyncio.create_task(music_task.start())
-                print(f"task started for {data['name']}")
                 self.ui_V2[guild_id] = music_task
             except Exception as e:
                 print(e)
@@ -373,12 +366,10 @@ class Trapard(commands.Bot):
                 pass
         else:
             try:
-                print(f"[I] track is from autoplay and his id is: {track.identifier}")
                 result = await download(pool=self.pool, session=self.session, video_id=track.identifier, downloader=1065781211219370104, is_autoplay=True)
                 if isinstance(result, VideoDB):
                     music_task = ServerUI(bot=self, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=None, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result, auto_queue=c_auto_queue)
                     music_task.task = asyncio.create_task(music_task.start())
-                    print(f"task started for {result.name}")
                     self.ui_V2[guild_id] = music_task
 
                     # download auto_queue
@@ -391,7 +382,6 @@ class Trapard(commands.Bot):
                                 if isinstance(result, VideoDB):
                                     c_auto_queue.append(result)
                             except Exception as e:
-                                print("Error downloading from auto queue:", e)
                                 LogErrorInWebhook() 
                         music_task.auto_queue = c_auto_queue
                 else:
@@ -419,10 +409,7 @@ class Trapard(commands.Bot):
             except Exception as e:
                 print("X01:", e)
         if data:
-            print(f"[-] track {data['name']} ended\n")
             self.last_music[guild_id] = data['name']
-        else:
-            print(f"[-] track {track.identifier} ended\n")
         try:
             if guild_id in self.ui_V2:
                 await self.ui_V2[guild_id].stop()
@@ -434,7 +421,6 @@ class Trapard(commands.Bot):
         if len(player.queue) > 0:
             if len(player.channel.voice_states) > 1:
                 next_track: wavelink.Playable = player.queue.get()
-                print(next_track.identifier, " next track")
                 return await player.play(next_track)
         return
 
