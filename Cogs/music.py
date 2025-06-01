@@ -1,16 +1,16 @@
 from typing import Literal, List, Tuple, cast
 from discord.ext import commands
 from .utils.classes import VideoDB
-from youtube_search import YoutubeSearch
+from youtube_search import YoutubeSearch # type: ignore
 from discord import app_commands
-from pytube import YouTube
+from pytube import YouTube # type: ignore
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate
+import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate # type: ignore
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
-from wavelink import AutoPlayMode
+from wavelink import AutoPlayMode # type: ignore
 from aiohttp import ClientSession
 
 music_table = "musiquesV3"
@@ -957,6 +957,7 @@ class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all
                     await interaction.followup.send(embed=mlist[0], view=view)
             elif button.custom_id == "skip":
                 track = self.player.current
+                self.player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
                 await self.player.skip(force=True)
                 if track is not None:
                     if self.player.guild.id in self.bot.server_music_session:
@@ -1168,7 +1169,6 @@ class SoundBoardView(discord.ui.View):
         self.ctx = ctx
         self.sounds = sounds
         self.page_count = len(sounds)
-        self.current_page = 0
         self.bot = bot
         self.sb_manage = sb_manage
         if self.sounds is not None:
@@ -1208,8 +1208,6 @@ class SoundBoardView(discord.ui.View):
             self.current_page = 0
         elif self.current_page >= self.page_count:
             self.current_page = self.page_count - 1
-        elif self.current_page == self.page_count:
-            self.current_page = self.page_count
         self.clear_items() # Remove all btns
         for button in self.sounds[self.current_page]:
             self.add_item(button)
@@ -1737,6 +1735,7 @@ class Music(commands.Cog):
                     if position is None:
                         cur_track = f"`{current_data['name']}` (**{current_data['pos']}**) a été passé par "
                         name = current_data['name']
+                        player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
                         await player.skip(force=True)
                     else:
                         next_track = player.queue.get_at(position - 1)
@@ -1747,6 +1746,7 @@ class Music(commands.Cog):
                 else:
                     cur_track = f"`{player.current}` (**autoplay**) a été passé par "
                     name = None
+                    player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
                     await player.skip(force=True)
             else:
                 embed = create_embed(title="Erreur", description="Il n'y a pas de musique en cours de lecture.")
@@ -1992,8 +1992,8 @@ class Music(commands.Cog):
                 _track = await wavelink.Playable.search(f"{MUSICS_FOLDER}{music}.mp3", source=None)
                 if len(_track) == 0:
                     continue
-                index, downloader = await self.music_list_handler.get_index_by_music_name(music)
-                duration = await self.music_list_handler.get_song_duration_by_index(str(index))
+                index, downloader = await mlist_handler.get_index_by_music_name(music)
+                duration = await mlist_handler.get_song_duration_by_index(str(index))
                 _track[0].extras = {"_downloader": downloader, "_index": index, "_name": music, "_duration": duration, "_txt_chann": ctx.channel.id}
                 tracks.append(_track[0])
             if len(tracks) == 0:
@@ -2213,8 +2213,8 @@ class Music(commands.Cog):
             LogErrorInWebhook()
 
     @commands.hybrid_command(name="remove-liked-song", aliases=["rm-liked", "dislike"])
-    @app_commands.describe(index= "Le numéro (index) de la musique à enlever de tes musiques likés.")
-    @app_commands.describe(musique_name="Le nom de la musique à enlever de tes musiques likés.")
+    @app_commands.describe(index= "Le numéro (index) de la musique à enlever de tes musiques likées.")
+    @app_commands.describe(musique_name="Le nom de la musique à enlever de tes musiques likées.")
     async def remove_liked_song(self, ctx: commands.Context, index: int=None, musique_name:str=None):
         """Supprimer une musique de tes titres likées."""
         try:

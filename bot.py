@@ -12,8 +12,8 @@ from Cogs.utils.data import FULL_EMOJIS_LIST
 from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku,convert_to_minutes_seconds, get_latest_message_from_channel,save_song_stats, getVar, parse_name_tuple
 from Cogs.utils.path import DB_PATH, MAIN_DIR
 from asyncio import sleep
-from wavelink import Player
-import asyncio, openai, os, wavelink, traceback, re, html, time
+from wavelink import Player # type: ignore
+import asyncio, openai, os, wavelink, traceback, re, html, time # type: ignore
 
 if TYPE_CHECKING:
     from .bot import Trapard
@@ -48,7 +48,7 @@ class ServerUI:
         self.track_index = track_index
         self.track_duration = track_duration
         self.txt_channel_id = txt_channel_id
-        self._running = True
+        self._running = False
         self.loop = asyncio.get_event_loop()
         self._task = None
         self.guild_id = None
@@ -58,7 +58,7 @@ class ServerUI:
 
     async def start(self):
         try:
-            print("===== Music UI Task started for", self.track_name, "=====")
+            print("===== ServerUI.start() started for", self.track_name, "=====")
             self._running = True
             last_message = None
             start_time = perf_counter()
@@ -158,14 +158,13 @@ class ServerUI:
                 except Exception as e:
                     traceback.print_exc()
                     await sleep(3)
-            return
         except Exception as e:
             print("Music UI start error:", e)
             LogErrorInWebhook(f"Music UI start error for {self.track_name} ({self.track_index}) in guild {self.guild_id}.\n```{e}```")
             traceback.print_exc()
 
     async def stop(self):
-        print("[F] MusicUITask stopped for", self.track_name)
+        print("[F] ServerUI.stop() for", self.track_name)
         if self.played_time > 4:
             await save_song_stats(time=int(self.played_time), number=1, pool=self.bot.pool)
         if self.guild_id in self.bot.server_music_session:
@@ -228,7 +227,7 @@ class Trapard(commands.Bot):
         )
         super().__init__(
             command_prefix="!",
-            description="Petit bot familiale. Dev par @reusreus :)",
+            description="Petit bot familial. Dev par @reusreus :)",
             pm_help=None,
             help_attrs=dict(hidden=True),
             chunk_guilds_at_startup=False,
@@ -296,6 +295,8 @@ class Trapard(commands.Bot):
         self.bot_app_info = await self.application_info()
         self.owner_id = self.bot_app_info.owner.id
 
+        self.locks: Dict[int, asyncio.Lock] = {}
+
         # Load unique music downloader
         self.unique_downloader = await get_unique_downloader(pool=self.pool)
         print(self.unique_downloader)
@@ -345,15 +346,6 @@ class Trapard(commands.Bot):
         track: wavelink.Playable = payload.track
         c_auto_queue = []
         guild_id = player.guild.id
-        max_retries = 150
-        while guild_id in self.ui_V2:
-            max_retries -= 1
-            await asyncio.sleep(0.1)
-            if max_retries <= 0:
-                await self.ui_V2[guild_id].stop()
-                self.ui_V2[guild_id].task.cancel()
-                self.ui_V2.pop(guild_id, None)	
-                break
         data = dict(track.extras)
         if data:
             try:
@@ -386,16 +378,24 @@ class Trapard(commands.Bot):
                         music_task.auto_queue = c_auto_queue
                 else:
                     LogErrorInWebhook(f"[I] track is from autoplay and his id is: {track.identifier} but result was not a VideoDB, result: {result}")
+
             except Exception as e:
                 print("EE", e)
-
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         player: wavelink.Player | None = payload.player
         if not player:
             return
+        guild_id = player.guild.id
+
+        if hasattr(player, "_skip_by_command") and player._skip_by_command:
+            player._skip_by_command = False
+            if guild_id in self.ui_V2:
+                await self.ui_V2[guild_id].stop()
+            print("[I] Skipped by command, not processing end event.")
+            return
+
         track: wavelink.Playable = payload.track
         data = dict(track.extras)
-        guild_id = player.guild.id
         if len(player.channel.members) == 1:
             try:
                 await player.disconnect()
@@ -414,7 +414,7 @@ class Trapard(commands.Bot):
             if guild_id in self.ui_V2:
                 await self.ui_V2[guild_id].stop()
                 self.ui_V2[guild_id].task.cancel()
-                self.ui_V2.pop(guild_id, None)
+                print(f"STOPPED UI for guild {guild_id} and track {data['name'] if data else 'unknown'}")
         except Exception as e:
             print("X02:", e)
 
