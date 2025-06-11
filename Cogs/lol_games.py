@@ -1019,6 +1019,7 @@ class LolGames(commands.Cog):
                         return False
 
             async def save_new_match(matchId: str, puuid: str):
+                if matchId is None: matchId = "None"
                 async with self.bot.pool.acquire() as conn:
                     async with conn.transaction():
                         await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (matchId, puuid))
