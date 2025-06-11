@@ -7,7 +7,7 @@ from pytube import YouTube # type: ignore
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar, parse_name_tuple, save_song_stats, format_duration, get_latest_message_from_channel
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER, MAIN_DIR
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate , html, datetime, re
+import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate , html, datetime, re # type: ignore
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
 from wavelink import AutoPlayMode
@@ -2738,6 +2738,9 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
         try: vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
         except AttributeError: return await ctx.send(embed=create_embed(title="Erreur", description="Tu n'es pas dans un channel vocal..."), ephemeral=True)
         
+        try: await ctx.defer()
+        except: pass
+
         try: await ctx.message.add_reaction("\u2705")
         except discord.errors.NotFound: pass
         
