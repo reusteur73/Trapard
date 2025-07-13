@@ -13,7 +13,6 @@ from PIL import Image, ImageDraw, ImageFont
 from wavelink import AutoPlayMode
 from aiohttp import ClientSession
 from wavelink import Player
-from time import perf_counter
 from asyncio import sleep
 
 music_table = "musiquesV3"
@@ -42,7 +41,6 @@ class ServerUI:
             print("===== ServerUI.start() started for", self.track_name, "=====")
             self._running = True
             last_message = None
-            start_time = perf_counter()
             if self.txt_channel_id:
                 txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
             else:
@@ -62,16 +60,15 @@ class ServerUI:
             iteration = 0
             while self.player.playing and self._running:
                 iteration += 1
+                self.played_time = self.player.position / 1000
                 try:
-                    loop_time = perf_counter()
-                    current_time = perf_counter() - start_time
                     view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
                     self.next_musics = [VideoDB.from_row(music.extras) for music in self.player.queue[:8]]
                     if self.player.autoplay == wavelink.AutoPlayMode.enabled and len(self.auto_queue) > 0 and len(self.next_musics) < 5:
                         for i in range(min(3, len(self.auto_queue))):
                             self.next_musics.append(self.auto_queue[i])
                     try:
-                        await asyncio.wait_for(asyncio.to_thread(draw_music, self.guild_id, int(current_time), self.video, self.next_musics), timeout=8)
+                        await asyncio.wait_for(asyncio.to_thread(draw_music, self.guild_id, int(self.played_time), self.video, self.next_musics), timeout=8)
                     except asyncio.TimeoutError:
                         pass
                     except Exception as e:
@@ -109,11 +106,8 @@ class ServerUI:
                             except asyncio.TimeoutError:
                                 pass
                     except discord.errors.HTTPException:
-                        LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) cannot be edited, message not found.")
+                        # LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) cannot be edited, message not found.")
                         pass
-                    if self.guild_id in self.bot.server_music_session:
-                        self.bot.server_music_session[self.guild_id]['time'] +=  int(perf_counter() - loop_time)
-                    self.played_time += perf_counter() - loop_time
                     if isinstance(self.video.duree, tuple):
                         _, _duree = self.video.duree
                         duree = int(str(_duree).split(".")[0])
@@ -121,7 +115,7 @@ class ServerUI:
                         duree = int(int(str(self.video.duree).split(".")[0]))
                     else:
                         duree = int(self.video.duree)
-                    if int(current_time) > (duree * 1.02):# If current time is 2% bigger than song time, cancel the task
+                    if int(self.played_time) > (duree * 1.02):# If current time is 2% bigger than song time, cancel the task
                         LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) has overplayed.")
                         try:
                             await self.stop()
@@ -150,6 +144,7 @@ class ServerUI:
             await save_song_stats(time=int(self.played_time), number=1, pool=self.bot.pool)
         if self.guild_id in self.bot.server_music_session:
             self.bot.server_music_session[self.guild_id]['nb'] +=  1
+            self.bot.server_music_session[self.guild_id]['time'] +=  int(self.played_time)
         if self.ui_message:
             await asyncio.to_thread(draw_music, self.guild_id, 0, self.video, self.next_musics, True)
             file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_end_music_player.png", filename=f"Music.png")
