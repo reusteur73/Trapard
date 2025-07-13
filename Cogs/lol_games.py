@@ -639,21 +639,12 @@ class LolGames(commands.Cog):
                 return None
             
             async def get_user_rank(puuid: str, region="euw1"):
-                # Requête pour obtenir les informations du summoner
-
                 if region == "euw":
                     region = "euw1"
                 if region != "euw1":
                     region = "oc1"
-                summoner_url = f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
-                async with self.bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
-                    summoner_data = await summoner_response.json()
-                    encryptedId = summoner_data["id"]
-
                 # Requête pour obtenir les informations de classement du summoner
-                ranking_url = f"https://{region}.api.riotgames.com/lol/league/v4/entries/by-summoner/{encryptedId}"
-                if self.bot.debug:
-                    print(ranking_url)
+                ranking_url = f"https://{region}.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}"
                 async with self.bot.session.get(ranking_url, headers=get_riot_api_headers()) as ranking_response:
                     ranking_data = await ranking_response.json()
                 ranks = []
@@ -1167,8 +1158,8 @@ class LolGames(commands.Cog):
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
                                     await save_new_match(last_match, puuid)
                                     continue
-                                except:
-                                    LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`")
+                                except Exception as e:
+                                    LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`\n{e}\n{traceback.format_exc()}")
                                     await save_new_match(last_match, puuid)
                                     continue
                             
