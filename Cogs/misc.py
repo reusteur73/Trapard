@@ -27,7 +27,10 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from TTS.api import TTS
 import pytz
-
+import base64
+import urllib.parse
+import codecs
+import re
 
 def get_local_time(country_code):
     try:
@@ -208,6 +211,120 @@ async def translate1(text: str, *, src: str = 'auto', dest: str = 'fr', session:
             source_language=source_language,
             target_language=target_language,
         )
+
+class EncoderDecoder:
+    def __init__(self):
+        self.formats = {
+            'binaire': {'aliases': ['bin', 'binaire'], 'encode': self.to_binary, 'decode': self.from_binary},
+            'hex': {'aliases': ['hex', 'hexa'], 'encode': self.to_hex, 'decode': self.from_hex},
+            'base64': {'aliases': ['b64', 'base64'], 'encode': self.to_base64, 'decode': self.from_base64},
+            'ascii': {'aliases': ['ascii'], 'encode': self.to_ascii, 'decode': self.from_ascii},
+            'url': {'aliases': ['url'], 'encode': self.to_url, 'decode': self.from_url},
+            'rot13': {'aliases': ['rot13'], 'encode': self.to_rot13, 'decode': self.to_rot13},
+            'morse': {'aliases': ['morse'], 'encode': self.to_morse, 'decode': self.from_morse},
+        }
+
+        self.morse_dict = {
+            'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.', 'G': '--.',
+            'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..', 'M': '--', 'N': '-.',
+            'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.', 'S': '...', 'T': '-', 'U': '..-',
+            'V': '...-', 'W': '.--', 'X': '-..-', 'Y': '-.--', 'Z': '--..', '0': '-----',
+            '1': '.----', '2': '..---', '3': '...--', '4': '....-', '5': '.....', '6': '-....',
+            '7': '--...', '8': '---..', '9': '----.', ' ': '/',
+        }
+
+    def detect_format_and_action(self, input_text):
+        try:
+            input_text = input_text.strip()
+
+            if input_text.lower().startswith("encode ") or input_text.lower().startswith("decode "):
+                parts = input_text.split(maxsplit=2)
+                if len(parts) >= 2:
+                    action = parts[0].lower()
+                    fmt_candidate = parts[1].lower()
+                    content = parts[2] if len(parts) == 3 else ""
+
+                    for k, v in self.formats.items():
+                        if fmt_candidate in v['aliases']:
+                            return action, k, content
+
+                    if action == "decode":
+                        autodetected = self.autodetect_format(' '.join(parts[1:]))
+                        if autodetected:
+                            return action, autodetected, ' '.join(parts[1:])
+                    return None, None, ' '.join(parts[1:])
+
+            tokens = input_text.split(maxsplit=1)
+            if tokens:
+                fmt_candidate = tokens[0].lower()
+                content = tokens[1] if len(tokens) > 1 else ""
+                for k, v in self.formats.items():
+                    if fmt_candidate in v['aliases']:
+                        return 'encode', k, content
+
+            autodetected = self.autodetect_format(input_text)
+            if autodetected:
+                return 'decode', autodetected, input_text
+
+            return None, None, input_text
+        except Exception as e:
+            LogErrorInWebhook(error=f"[EncoderDecoder] Erreur dans detect_format_and_action: {e}")
+
+    def autodetect_format(self, text):
+        cleaned = text.replace(" ", "")
+        # Binaire
+        if re.fullmatch(r'[01 ]+', text) and len(cleaned) % 8 == 0: return 'binaire'
+        # Hex
+        if re.fullmatch(r'[0-9a-fA-F ]+', text) and len(cleaned) % 2 == 0: return 'hex'
+        # Base64
+        if re.fullmatch(r'[A-Za-z0-9+/=]+', cleaned) and len(cleaned) % 4 == 0: return 'base64'
+        # ASCII
+        if re.fullmatch(r'(\d{2,3}\s?)+', text): return 'ascii'
+        # Morse
+        if re.fullmatch(r'[\.\-/ ]+', text): return 'morse'
+        return None
+
+    def process(self, input_text: str):
+        action, fmt, content = self.detect_format_and_action(input_text)
+        if not action or not fmt:
+            return None, None, "Impossible de détecter l'action ou le format."
+        if fmt not in self.formats:
+            return None, None, f"Format inconnu. Formats supportés : {', '.join(self.formats.keys())}"
+        try:
+            func = self.formats[fmt][action]
+            result = func(content)
+            return result, fmt, action
+        except Exception as e:
+            return None, fmt, f"Erreur lors de la conversion : {str(e)}"
+
+    # Encoders / Decoders
+    def to_binary(self, text): return ' '.join(format(ord(c), '08b') for c in text)
+    def from_binary(self, binary): return ''.join(chr(int(b, 2)) for b in binary.split())
+
+    def to_hex(self, text): return text.encode().hex()
+    def from_hex(self, hex_text): return bytes.fromhex(hex_text.replace(" ", "")).decode()
+
+    def to_base64(self, text): return base64.b64encode(text.encode()).decode()
+    def from_base64(self, b64): return base64.b64decode(b64).decode()
+
+    def to_ascii(self, text): return ' '.join(str(ord(c)) for c in text)
+    def from_ascii(self, ascii_str): return ''.join(chr(int(n)) for n in ascii_str.split())
+
+    def to_url(self, text): return urllib.parse.quote(text)
+    def from_url(self, text): return urllib.parse.unquote(text)
+
+    def to_rot13(self, text): return codecs.encode(text, 'rot_13')
+
+    def to_morse(self, text): return ' '.join(self.morse_dict.get(c.upper(), '') for c in text)
+    def from_morse(self, code):
+        inverse = {v: k for k, v in self.morse_dict.items()}
+        output = []
+        for c in code.split():
+            if c in inverse:
+                output.append(inverse[c])
+            else:
+                raise ValueError(f"Symbole Morse invalide : {c}")
+        return ''.join(output)
 
 async def handle_r34(bot: Trapard, userid: discord.User):
     chann = bot.get_channel(1042529320675053598)
@@ -1557,6 +1674,49 @@ class Misc(commands.Cog):
                 embed = create_embed(title="Texte en binaire", description=convert_to_binary(texte))
             return await ctx.reply(embed=embed)
         except: LogErrorInWebhook()
+
+    @commands.hybrid_command()
+    async def decode(self, ctx: Context, *, texte: str = None):
+        """Décoder le texte en binaire, hexadécimal, base64, ascii, url, morse, rot13."""
+        if texte is None:
+            reply = ctx.replied_message
+            if reply is not None:
+                texte = reply.content
+            else:
+                return await ctx.send('Aucun message à convertir.')
+
+        ed = EncoderDecoder()
+        if not texte or texte.strip() == "":
+            return await ctx.reply("Aucun message à convertir.")
+        try:
+            result, fmt, action = ed.process(f"decode {texte}")
+            embed = create_embed(title=f"Décodage du {fmt}", description=result)
+            await ctx.reply(embed=embed)
+        except Exception as e:
+            return await ctx.reply(f"Une erreur s'est produite lors du traitement du texte : {e.__class__.__name__}: {e}")
+    
+    @commands.hybrid_command()
+    async def encode(self, ctx: Context, *, texte: str = None):
+        """Encoder le texte en binaire, hexadécimal, base64, ascii, url, morse, rot13."""
+        if texte is None:
+            reply = ctx.replied_message
+            if reply is not None:
+                texte = reply.content
+            else:
+                return await ctx.send('Aucun message à convertir.')
+        
+        if texte.split()[0] not in ["binaire", "hex", "base64", "ascii", "url", "morse", "rot13"]:
+            return await ctx.reply(embed=create_embed(title="Erreur", description=f"Merci de spécifier le format dans lequel vous souhaitez encoder le texte.\n\nFormats disponibles : `binaire`, `hex`, `base64`, `ascii`, `url`, `morse`, `rot13`."))
+
+        ed = EncoderDecoder()
+        if not texte or texte.strip() == "":
+            return await ctx.reply("Aucun message à convertir.")
+        try:
+            result, fmt, action = ed.process(f"encode {texte}")
+            embed = create_embed(title=f"Encodage en {fmt}", description=result)
+            await ctx.reply(embed=embed)
+        except Exception as e:
+            return await ctx.reply(f"Une erreur s'est produite lors du traitement du texte : {e.__class__.__name__}: {e}")
 
     @commands.hybrid_command(name="heure", aliases=["time"])
     async def heure(self, ctx: commands.Context, country_code: str):

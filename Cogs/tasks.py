@@ -63,11 +63,11 @@ class RencontreNc:
             re
         except Exception as e:
             LogErrorInWebhook(error=f"[IMAGE DOWNLOAD] {e} USER={userid}")
+    
     async def save(self, id:int, text:str, title: str, category: str):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("INSERT INTO rencontresNC (annonce_id, titre, texte, category) VALUES (?,?,?,?)", (id,title, text, category,))
-
 
     async def is_in(self, id:int):
         async with self.pool.acquire() as conn:
