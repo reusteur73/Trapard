@@ -23,7 +23,7 @@ from asyncio import sleep
 from bot import Trapard, DB_PATH
 from aiohttp import ClientSession
 from asqlite import Pool
-from datetime import datetime
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from TTS.api import TTS
 import pytz
@@ -1953,6 +1953,25 @@ class Misc(commands.Cog):
         except:
             LogErrorInWebhook()
 
+    @commands.hybrid_command(name="uptime", aliases=["upt"])
+    async def uptime(self, ctx: commands.Context):
+        now = datetime.now(timezone.utc)
+        delta = now - self.bot.launch_time
+        days, remainder = divmod(int(delta.total_seconds()), 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        parts = []
+        if days > 0:
+            parts.append(f"{days}j")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+        parts.append(f"{seconds}s")
+
+        await ctx.send(embed=create_embed(title="Uptime", description=f"Je suis en ligne depuis : {' '.join(parts)}."))
+
     @commands.hybrid_command(name="aram")
     async def aram_cmd(self, ctx: commands.Context, player: str=None, region:str="EUW"):
         try:
@@ -2041,7 +2060,6 @@ class Misc(commands.Cog):
             return await ctx.send(embed=embed)
         except:
             LogErrorInWebhook()
-
 
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     

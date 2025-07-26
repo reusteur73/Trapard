@@ -99,6 +99,8 @@ class Trapard(commands.Bot):
         self.unique_downloader_display_names = {}
         self.unique_downloader_avatars = {}
 
+        self.launch_time = datetime.datetime.now(datetime.timezone.utc)
+
         self.server_music_session = {}
 
 
