@@ -222,6 +222,7 @@ class EncoderDecoder:
             'url': {'aliases': ['url'], 'encode': self.to_url, 'decode': self.from_url},
             'rot13': {'aliases': ['rot13'], 'encode': self.to_rot13, 'decode': self.to_rot13},
             'morse': {'aliases': ['morse'], 'encode': self.to_morse, 'decode': self.from_morse},
+            'unicode': {'aliases': ['ucode'], 'encode': self.to_unicode, 'decode': self.from_unicode},
         }
 
         self.morse_dict = {
@@ -282,6 +283,12 @@ class EncoderDecoder:
         if re.fullmatch(r'(\d{2,3}\s?)+', text): return 'ascii'
         # Morse
         if re.fullmatch(r'[\.\-/ ]+', text): return 'morse'
+        # URL
+        if re.fullmatch(r'[\w\-\.~:/?#\[\]@!$&\'()*+,;=]+', cleaned): return 'url'
+        # Unicode
+        if re.fullmatch(r'U\+[0-9A-Fa-f]{4}( U\+[0-9A-Fa-f]{4})*', cleaned): return 'unicode'
+        # ROT13
+        if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ' for c in text):  return 'rot13'  
         return None
 
     def process(self, input_text: str):
@@ -325,6 +332,14 @@ class EncoderDecoder:
             else:
                 raise ValueError(f"Symbole Morse invalide : {c}")
         return ''.join(output)
+
+    def to_unicode(self, text: str) -> str:
+        return ' '.join(f'U+{ord(c):04X}' for c in text)
+    def from_unicode(self, unicode_str: str) -> str:
+        try:
+            return ''.join(chr(int(u, 16)) for u in unicode_str.split())
+        except ValueError as e:
+            raise ValueError(f"Erreur de conversion Unicode : {e}")
 
 async def handle_r34(bot: Trapard, userid: discord.User):
     chann = bot.get_channel(1042529320675053598)
@@ -1705,8 +1720,8 @@ class Misc(commands.Cog):
             else:
                 return await ctx.send('Aucun message à convertir.')
         
-        if texte.split()[0] not in ["binaire", "hex", "base64", "ascii", "url", "morse", "rot13"]:
-            return await ctx.reply(embed=create_embed(title="Erreur", description=f"Merci de spécifier le format dans lequel vous souhaitez encoder le texte.\n\nFormats disponibles : `binaire`, `hex`, `base64`, `ascii`, `url`, `morse`, `rot13`."))
+        if texte.split()[0] not in ["binaire", "hex", "base64", "ascii", "url", "morse", "rot13", "unicode", "ucode"]:
+            return await ctx.reply(embed=create_embed(title="Erreur", description=f"Merci de spécifier le format dans lequel vous souhaitez encoder le texte.\n\nFormats disponibles : `binaire`, `hex`, `base64`, `ascii`, `url`, `morse`, `rot13`, `unicode`."))
 
         ed = EncoderDecoder()
         if not texte or texte.strip() == "":
