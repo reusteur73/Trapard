@@ -1,5 +1,5 @@
 from discord.ext import commands
-import discord, aiohttp, datetime, random
+import discord, aiohttp, datetime, random, traceback
 from time import perf_counter
 from collections import Counter
 import concurrent.futures
@@ -473,7 +473,8 @@ class Trapard(commands.Bot):
                 original = error.original
                 if not isinstance(original, discord.HTTPException):
                     log.exception('In %s:', ctx.command.qualified_name, exc_info=original)
-                    LogErrorInWebhook(error=f"In {ctx.command.qualified_name}, {original}")
+                    tb_text = ''.join(traceback.format_exception(type(original), original, original.__traceback__))
+                    LogErrorInWebhook(error=f"In {ctx.command.qualified_name}, {original} \n{tb_text}")
             elif isinstance(error, commands.ArgumentParsingError):
                 await ctx.send(str(error))
         except Exception as e:
