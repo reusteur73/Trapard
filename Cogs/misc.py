@@ -2061,6 +2061,146 @@ class Misc(commands.Cog):
         except:
             LogErrorInWebhook()
 
+    @commands.hybrid_command(name="track")
+    async def track(self, ctx: commands.Context, *, userid: str):
+        """Track un utilisateur."""
+        class TrackerPaginator:
+            def __init__(self, ctx: commands.Context, embeds: list, bot: commands.Bot, timeout: int = 60):
+                self.ctx = ctx
+                self.embeds = embeds
+                self.bot = bot
+                self.timeout = timeout
+                self.current_page = 0
+                self.message = None
+
+            async def send(self):
+                if self.message is None:
+                    self.message = await self.ctx.send(embed=self.embeds[self.current_page])
+                else:
+                    await self.message.edit(embed=self.embeds[self.current_page])
+                if len(self.embeds) > 1:
+                    await self.message.add_reaction("⏪")  # -10%
+                    await self.message.add_reaction("◀️")
+                    await self.message.add_reaction("▶️")
+                    await self.message.add_reaction("⏩")  # +10%
+                    await self.message.add_reaction("❌")
+                    self.bot.loop.create_task(self.wait_for_reactions(self.message))
+
+            async def wait_for_reactions(self, message: discord.Message):
+                def check(reaction, user):
+                    return (
+                        user == self.ctx.author
+                        and reaction.message.id == message.id
+                        and str(reaction.emoji) in ["⏪", "◀️", "▶️", "⏩", "❌"]
+                    )
+
+                while True:
+                    try:
+                        reaction, user = await self.bot.wait_for('reaction_add', timeout=self.timeout, check=check)
+                        emoji = str(reaction.emoji)
+                        if emoji == "◀️":
+                            if self.current_page > 0:
+                                self.current_page -= 1
+                        elif emoji == "▶️":
+                            if self.current_page < len(self.embeds) - 1:
+                                self.current_page += 1
+                        elif emoji == "⏪":
+                            step = max(1, len(self.embeds) // 10)
+                            self.current_page = max(0, self.current_page - step)
+                        elif emoji == "⏩":
+                            step = max(1, len(self.embeds) // 10)
+                            self.current_page = min(len(self.embeds) - 1, self.current_page + step)
+                        elif emoji == "❌":
+                            await message.clear_reactions()
+                            break
+                        await message.edit(embed=self.embeds[self.current_page])
+                        await message.remove_reaction(reaction, user)
+                    except asyncio.TimeoutError:
+                        await message.clear_reactions()
+                        break
+                    except Exception as e:
+                        LogErrorInWebhook()
+                        break
+
+            async def on_timeout(self):
+                try:
+                    await self.ctx.message.clear_reactions()
+                except discord.NotFound:
+                    pass
+        class TrackerDropDown(discord.ui.Select):
+            def __init__(self, options, pool: Pool, bot: commands.Bot, ctx: commands.Context, user_id: str):
+                super().__init__(placeholder='Quel site track ?', options=options, max_values=1, min_values=1)
+                self.pool = pool
+                self.bot = bot
+                self.ctx = ctx
+                self.user_id = user_id
+
+            async def callback(self, interaction: discord.Interaction):
+                try:
+                    try: await interaction.response.defer()
+                    except: pass
+                    val = self.values[0]
+                    async with self.pool.acquire() as conn:
+                        if val == "all":
+                            annonces = await conn.fetchall("SELECT id, titre, description, prix, categorie, site, annonce_id, slug, status, kind, medias, scrapped_at FROM annonces WHERE user_id = ?", (self.user_id,))
+                        else:
+                            annonces = await conn.fetchall("SELECT id, titre, description, prix, categorie, site, annonce_id, slug, status, kind, medias, scrapped_at FROM annonces WHERE user_id = ? AND site = ?", (self.user_id, val))
+                    if not annonces: return await self.ctx.send(embed=create_embed(title="Tracker", description=f"Aucune annonce trouvée pour l'utilisateur {afficher_nombre_fr(self.user_id)}."))
+                    # paginator each annonce
+                    embeds = []
+                    for i, annonce in enumerate(annonces):
+                        fields = []
+                        description = annonce['description']
+                        if len(description) <= 1024:
+                            fields.append({"name": "Description", "value": description, "inline": False})
+                        else:
+                            chunks = [description[i:i+1024] for i in range(0, len(description), 1024)]
+                            for j, chunk in enumerate(chunks):
+                                fields.append({"name": "", "value": chunk, "inline": False})
+                        if annonce['prix'] is not None:
+                            fields.append({"name": "Prix", "value": f"{afficher_nombre_fr(int(annonce['prix']))}", "inline": True})
+                        fields.append({"name": "Catégorie", "value": f"{annonce['categorie']} du site {annonce['site']} - Scrappé le {annonce['scrapped_at']}", "inline": False})
+                        embed = create_embed(title=f"{annonce['titre']}", description=f"  ", fields=fields, color=0x00ff00)
+                        if annonce['medias']:
+                            embed.set_image(url=annonce['medias'][0])
+                        embed.set_author(name=f"Annonce n°{afficher_nombre_fr(int(annonce['annonce_id']))} par l'utilisateur n°{afficher_nombre_fr(int(self.user_id))} - Page {i+1}/{len(annonces)}", url=f"https://annonces.nc/{annonce['site'].split('.')[0]}/posts/{annonce['slug']}", icon_url=f"https://annonces.nc/assets/images/sites/{annonce['site'].split('.')[0]}.png")
+                        if 'cdn.medias.annonces.nc' in annonce["medias"]:
+                            embed.set_image(url=annonce["medias"].split(",")[0])
+                        
+                        embeds.append(embed)
+                    if len(embeds) == 1:
+                        return await self.ctx.send(embed=embeds[0])
+                    paginator = TrackerPaginator(ctx=self.ctx, embeds=embeds, bot=self.bot)
+                    await paginator.send()
+                except Exception as e:
+                    LogErrorInWebhook()
+                    return await self.ctx.send(embed=create_embed(title="Tracker", description=f"Une erreur est survenue lors de la récupération des annonces pour l'utilisateur {afficher_nombre_fr(self.user_id)}."))
+
+        class DropDownView(discord.ui.View):
+            try:
+                def __init__(self):
+                    super().__init__()
+            except Exception as e:
+                LogErrorInWebhook()
+        try:
+            await command_counter(user_id=str(ctx.author.id), bot=self.bot)
+            if not userid.isdigit(): return await ctx.send(embed=create_embed(title="Tracker", description="Merci de spécifier un ID utilisateur valide à tracker."))
+            async with self.bot.pool_2.acquire() as conn:
+                row = await conn.fetchone("SELECT count(id) AS total FROM annonces WHERE user_id = ?", (userid,))
+                nombre = row["total"]
+                if not nombre or nombre == 0: return await ctx.send(embed=create_embed(title="Tracker", description=f"Aucune annonce trouvée pour l'utilisateur {afficher_nombre_fr(int(userid))}."))
+                row = await conn.fetchall("SELECT DISTINCT site as sites FROM annonces WHERE user_id = ?", (userid,))
+                sites = [site["sites"] for site in row]
+                options = [discord.SelectOption(label=site.split(".")[0], value=site) for site in sites]
+                options.insert(0, discord.SelectOption(label="Sélectionner un site", value="none", default=True))
+                view = DropDownView()
+                view.add_item(TrackerDropDown(options=options, pool=self.bot.pool_2, bot=self.bot, ctx=ctx, user_id=userid))
+                embed = create_embed(title="Tracker", description=f"L'utilisateur n°{afficher_nombre_fr(int(userid))} a posté **{afficher_nombre_fr(int(nombre))}** annonces sur **{len(sites)}** sites différent(s).\n\nSélectionnez un site pour voir les annonces.")
+                await ctx.send(embed=embed, view=view)
+        except Exception as e:
+            LogErrorInWebhook(f"{e.__class__.__name__}: {e}")
+            return await ctx.send(embed=create_embed(title="Tracker", description=f"Une erreur est survenue lors de la récupération des annonces pour l'utilisateur {afficher_nombre_fr(int(userid))}.\n\nErreur: {e.__class__.__name__}: {e} \n{traceback.format_exc()}"))
+
 async def play_hexcodle(ctx: commands.Context, bot: Trapard):
     
     def generate_random_color():

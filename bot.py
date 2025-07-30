@@ -10,7 +10,7 @@ from typing import Dict, TYPE_CHECKING
 from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler
 from Cogs.utils.data import FULL_EMOJIS_LIST
 from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar
-from Cogs.utils.path import DB_PATH
+from Cogs.utils.path import DB_PATH, DB_PATH_2
 from asyncio import sleep
 import asyncio, openai, wavelink, time # type: ignore
 
@@ -89,6 +89,7 @@ class Trapard(commands.Bot):
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         # Setting db 
         self.pool: asqlite.Pool = await asqlite.create_pool(DB_PATH)
+        self.pool_2: asqlite.Pool = await asqlite.create_pool(DB_PATH_2)
 
         nodes = [wavelink.Node(uri="http://127.0.0.1:2333", password=getVar("LAVALINK_PWD"))]
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=None)
