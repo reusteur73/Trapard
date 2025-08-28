@@ -685,11 +685,13 @@ class LolGames(commands.Cog):
                     return data[0]
             
             async def getQueueByID(id: int):
+                if id in [4250,4210]: return "Doom Bots" # hardcoded cause not in api! Yay!!
                 async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
                     data = await response.json()
                     for queue in data:
                         if queue["queueId"] == id:
                             return queue["description"]
+                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
                     return "Mode de jeu inconnu"
 
             async def get_match_data(matchid, player_uuid, region):
@@ -697,8 +699,7 @@ class LolGames(commands.Cog):
                 else: subdom = "europe"
                 reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_riot_api_headers())
                 if reponse.status != 200:
-                    if reponse.status != 403: # Waiting brawl returning 403, remove this later
-                        LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie : {reponse.status}")
+                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie {matchid} | réponse code : {reponse.status}")
                     return None
 
                 data = await reponse.json()
@@ -1138,16 +1139,19 @@ class LolGames(commands.Cog):
                                     #     if champ["championId"] == match_data["championId"]:
                                     #         new_champ_master = champ["championPoints"]
                                     #         break
-                                    timestamp = game_creation / 1000
-                                    dt = datetime.datetime.fromtimestamp(timestamp)
                                     text += f'\n- **Total game: {afficher_nombre_fr(gains)} {str(trapcoins_emoji)} gagnés**'
                                     if texte_to_send is not None:
                                         text += f"\n- {texte_to_send}"
                                     text += f"\n- Bonus tier: {display_big_nums(tier_bonus)} {str(trapcoins_emoji)} || ({afficher_nombre_fr(tier_bonus)} {str(trapcoins_emoji)}) ||"                  
                                     channel = self.bot.get_channel(1112233401286672394)
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
-                                    output, results, bans = await get_game_data(raw_data, api_version)
-                                    await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, output, results, bans, mentions)
+                                    player_list, results, bans = await get_game_data(raw_data, api_version)
+                                    if raw_data["info"]["gameMode"] in ["RUBY_TRIAL_2", "RUBY"]: # DoomBot mode only
+                                        for n, participant in enumerate(raw_data["info"]["participants"]):
+                                            if participant["summonerId"] == "BOT":
+                                                player_list[n]["pseudo"] = str(participant["riotIdGameName"]).replace("Ruby_","").title().strip()
+                                                player_list[n]["championIcon"] = await getChampionIcon(str(participant["championName"]).replace("Ruby_",""), api_version)
+                                    await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, player_list, results, bans, mentions)
                                     file = discord.File(f"{FILES_PATH}{mentions}-game.png", filename=f"Game.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
                                     embed.set_image(url=f"attachment://Game.png")
