@@ -1,7 +1,7 @@
-import discord
+import discord, subprocess
 from discord.ext import commands
 from bot import Trapard
-from .utils.functions import LogErrorInWebhook, write_item, load_json_data
+from .utils.functions import LogErrorInWebhook, write_item, load_json_data, create_embed
 from typing import Optional, Literal, List
 
 
@@ -201,6 +201,23 @@ class Admin(commands.Cog):
                     await ctx.send(f"query: {query}", view=view, embed=embeds[0])
                 else:
                     await ctx.send(f"query: {query} executed successfully")
+        except Exception as e:
+            LogErrorInWebhook()
+
+    @commands.command(name="reboot")
+    @commands.is_owner()
+    async def reboot(self, ctx: commands.Context):
+        try:
+            if ctx.author.id != self.bot.owner_id:
+                return await ctx.send("You are not allowed to use this command.")
+            await ctx.send(embed=create_embed(title="Admin", description="Rebooting...\n*ETA: 20-40s*", color=0xff0000))
+            proc = subprocess.run(
+                ["sudo", "systemctl", "restart", "trapard"],
+                capture_output=True,
+                text=True
+            )
+            if proc.returncode != 0:
+                await ctx.send(embed=create_embed(title="Admin", description=f"❌ Failed to restart service.\nError: {proc.stderr}", color=0xff0000))
         except Exception as e:
             LogErrorInWebhook()
 
