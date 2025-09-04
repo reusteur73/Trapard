@@ -655,7 +655,9 @@ class LolGames(commands.Cog):
                     return rang_le_plus_eleve(ranks)
                 elif len(ranks) == 0:
                     return "Non classé"
-                else: return ranks[0].title()
+                else: 
+                    parts = str(ranks[0]).split()
+                    return f"{parts[0].title()} {parts[1].capitalize()}"
 
             async def get_last_matchs(player_uuid, region):
                 if region == "oc1": subdom = "sea"
@@ -685,12 +687,16 @@ class LolGames(commands.Cog):
                     return data[0]
             
             async def getQueueByID(id: int):
-                if id in [4250,4210]: return "Doom Bots" # hardcoded cause not in api! Yay!!
+                match id: # hardcoded cause not in api! Yay!!
+                    case 4210: return "Doom Bots Normal"
+                    case 4220: return "Doom Bots Hard"
+                    case 4250: return "Doom Bots Malfaisance"
+                
                 async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
                     data = await response.json()
                     for queue in data:
                         if queue["queueId"] == id:
-                            return queue["description"]
+                            return str(queue["description"])
                     LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
                     return "Mode de jeu inconnu"
 
@@ -1157,6 +1163,7 @@ class LolGames(commands.Cog):
                                     embed.set_image(url=f"attachment://Game.png")
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                     if raw_data["info"]["platformId"] == "OC1": _region = "oce"
+                                    elif raw_data["info"]["platformId"].upper() == "EUW1": _region = "euw"
                                     else: _region = raw_data["info"]["platformId"].lower()
                                     await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
