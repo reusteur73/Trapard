@@ -221,5 +221,17 @@ class Admin(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
+    @commands.is_owner()
+    @commands.command(name='reload', description='DEV: Reload a cog file', hidden=True)
+    async def reload_cog(self, interaction: commands.Context, cog: str) -> None:
+        from bot import initial_extensions
+        if f"Cogs.{cog}" not in initial_extensions:
+            return await interaction.reply(embed=create_embed(title="Cog Reload", description=f'Cog "{cog}" ne semble pas exister.\nIl doit être dans la liste suivante: {", ".join([c.replace("Cogs.", "") for c in initial_extensions])}', color=0xff0000))
+        try:
+            await self.bot.reload_extension(f"Cogs.{cog}")
+            await interaction.reply(embed=create_embed(title="Cog Reload", description=f'Cog "{cog}" rechargée avec succès.', color=0x00ff00))
+        except Exception as e:
+            await interaction.reply(embed=create_embed(title="Cog Reload", description=f'Erreur lors du rechargement du Cog "{cog}".\nErreur: {e}', color=0xff0000))
+
 async def setup(bot: Trapard):
     await bot.add_cog(Admin(bot))
