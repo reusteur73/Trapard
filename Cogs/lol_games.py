@@ -691,21 +691,25 @@ class LolGames(commands.Cog):
                     case 4210: return "Doom Bots Normal"
                     case 4220: return "Doom Bots Hard"
                     case 4250: return "Doom Bots Malfaisance"
+                    case 4200: return "Aram du Chaos"
                 
                 async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
                     data = await response.json()
                     for queue in data:
                         if queue["queueId"] == id:
                             return str(queue["description"])
-                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
+                    LogErrorInWebhook(error=f"[LOL 0x01] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
                     return "Mode de jeu inconnu"
 
             async def get_match_data(matchid, player_uuid, region):
                 if region == "oc1": subdom = "sea"
                 else: subdom = "europe"
+                if matchid is None:
+                    LogErrorInWebhook(error=f"[LOL 0x02] matchid est None pour le joueur {player_uuid}")
+                    return None
                 reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_riot_api_headers())
                 if reponse.status != 200:
-                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des données de la partie {matchid} | réponse code : {reponse.status}")
+                    LogErrorInWebhook(error=f"[LOL 0x03] Erreur lors de la récupération des données de la partie {matchid} | réponse code : {reponse.status}")
                     return None
 
                 data = await reponse.json()
@@ -1036,6 +1040,10 @@ class LolGames(commands.Cog):
                             if self.bot.debug:
                                 print(last_match, last_stored_match)
                             if last_stored_match != last_match: # If the last match is different from the last stored match
+                                if last_match is None:
+                                    LogErrorInWebhook(f"[LOL 0x04] Erreur lors de la récupération du dernier match pour le joueur `{ign}` ({puuid}).\nMatch None sauvegardé comme dernier match.")
+                                    await save_new_match(last_match, puuid)
+                                    continue
                                 if mentions == "None":
                                     mentions = "?"
                                     tier_bonus = 0
@@ -1170,7 +1178,7 @@ class LolGames(commands.Cog):
                                     await save_new_match(last_match, puuid)
                                     continue
                                 except Exception as e:
-                                    LogErrorInWebhook(f"LoL-Game Erreur sur le match `{last_match}`\npuuid: `{puuid}`\n{e}\n{traceback.format_exc()}")
+                                    LogErrorInWebhook(f"[LOL 0x05] Erreur sur le match `{last_match}`\npuuid: `{puuid}`\n{e}\n{traceback.format_exc()}")
                                     await save_new_match(last_match, puuid)
                                     continue
                             
