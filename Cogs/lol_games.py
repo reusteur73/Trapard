@@ -685,12 +685,17 @@ class LolGames(commands.Cog):
                     return data[0]
             
             async def getQueueByID(id: int):
-                if id in [4250,4210]: return "Doom Bots" # hardcoded cause not in api! Yay!!
+                match id: # hardcoded cause not in api! Yay!!
+                    case 4210: return "Doom Bots Normal"
+                    case 4220: return "Doom Bots Hard"
+                    case 4250: return "Doom Bots Malfaisance"
+                    case 480: return "Quick Play Draft" # IDK why not in api ...
+
                 async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
                     data = await response.json()
                     for queue in data:
                         if queue["queueId"] == id:
-                            return queue["description"]
+                            return str(queue["description"])
                     LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
                     return "Mode de jeu inconnu"
 
