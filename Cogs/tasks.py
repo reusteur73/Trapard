@@ -237,6 +237,7 @@ class Tasks(commands.Cog):
             to_wait = seconds_until(5, 55)
             await sleep(to_wait)
             losers = await get_streak_file()
+            self.bot.day_vocal_time = {} # reset daily vocal time
         except Exception as e:
             LogErrorInWebhook()
 
