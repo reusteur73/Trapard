@@ -687,7 +687,9 @@ class LolGames(commands.Cog):
                     return data[0]
             
             async def getQueueByID(id: int):
-                if id in [4250,4210]: return "Doom Bots" # hardcoded cause not in api! Yay!!
+                match id:
+                    case 4250 | 4210: return "Doom Bots"
+                    case 480: return "Quick Play Draft"
                 async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
                     data = await response.json()
                     for queue in data:
