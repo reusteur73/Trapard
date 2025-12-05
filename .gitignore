@@ -1,7 +1,9 @@
 files/musics/*
-files/*
-Cogs/utils/path.py
-Cogs/blocker.py
-test.py
+files/
 *.pyc
-db.*
+__pycache__/
+Cogs/utils/asqlite/
+lava/
+Python-3.*
+requirements.txt
+trapard_venv/
