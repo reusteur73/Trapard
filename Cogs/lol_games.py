@@ -713,15 +713,22 @@ class LolGames(commands.Cog):
                 
                 try: participants = data["info"]["participants"]
                 except: return None
+                player_position = None
                 for index, p in enumerate(participants):
                     if player_uuid == p["puuid"]:
                         player_position = index
                         break
-                
+                if player_position is None:
+                    LogErrorInWebhook(error=f"[LOL 0x05] Impossible de trouver le joueur {player_uuid} dans la partie {matchid}")
+                    return None
                 player_data = participants[player_position]
                 game_duartion = data["info"]["gameDuration"]
                 game_creation = data["info"]["gameCreation"]
-                return player_data, game_duartion, game_creation, data["info"]["queueId"], data
+                summoner_icon_id = player_data["profileIcon"]
+                long_name = f"{player_data['riotIdGameName']}#{player_data['riotIdTagline']}"
+                champion_id = player_data["championId"]
+                game_version = data["info"]["gameVersion"]
+                return player_data, game_duartion, game_creation, data["info"]["queueId"], data, summoner_icon_id, long_name, champion_id, game_version
 
             def is_s(inte):
                 if inte >= 2:
@@ -906,12 +913,14 @@ class LolGames(commands.Cog):
                     return Image.open(io.BytesIO(content))
                 return None
             
-            async def getChampionIconByID(championID: int, api_version) -> io.BytesIO:
-                url = f"http://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/champion.json"
-                async with self.bot.session.get(url) as response:
+            async def getChampionIconByID(championID: int, api_version, url=False) -> io.BytesIO:
+                _url = f"http://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/champion.json"
+                async with self.bot.session.get(_url) as response:
                     data = await response.json()
                     for champ in data["data"]:
                         if data["data"][champ]["key"] == str(championID):
+                            if url:
+                                return f"http://ddragon.leagueoflegends.com/cdn/{api_version}/img/champion/{data['data'][champ]['image']['full']}"
                             return await getChampionIcon(data["data"][champ]["image"]["full"].replace(".png", ""), api_version)
                     return None
 
@@ -930,7 +939,10 @@ class LolGames(commands.Cog):
                     response.raise_for_status()
                     champion_icon_data = await response.read()
                 return Image.open(io.BytesIO(champion_icon_data)).convert("RGBA")
-            
+
+            async def get_profile_icon_url(iconId: int, api_version: str) -> str:
+                return f"http://ddragon.leagueoflegends.com/cdn/{api_version}/img/profileicon/{iconId}.png"
+
             async def get_drawing_data(game_data, game_duartion, userid, queuetype, raw_data, puuid, region, api_version):
                 pseudo = game_data["riotIdGameName"]
                 rank = await get_user_rank(puuid, region)
@@ -1046,17 +1058,21 @@ class LolGames(commands.Cog):
                                     tier_bonus = 0
                                 api_version = await getLastVersion()
                                 try:
-                                    match_data, game_duration, game_creation, queuetype, raw_data = await get_match_data(last_match, puuid, region)
+                                    match_data, game_duration, game_creation, queuetype, raw_data, summoner_icon_id, long_name, champion_id, game_version = await get_match_data(last_match, puuid, region)
                                 except TypeError:
                                     await save_new_match(last_match, puuid)
                                     continue
-
+                                summoner_icon_url = await get_profile_icon_url(summoner_icon_id, api_version)
+                                champion_icon_url = await getChampionIconByID(champion_id, api_version, url=True)
                                 isStored = await check_if_stored(last_match)
                                 if not isStored:
                                     async with self.bot.pool.acquire() as conn:
                                         async with conn.transaction():
                                             await conn.execute("INSERT INTO lol_match_data (match_id, data) VALUES (?, ?)", (last_match, raw_data))
                                 queuetype = await getQueueByID(queuetype)
+                                saison, patch, patch2 = api_version.split(".")
+                                footer = f'Match {last_match.split("_")[1]} · {raw_data["info"]["platformId"]} · Patch {patch}.{patch2} · Saison {saison} · Game Version {game_version} · Powered by Riot API · Generated by reusreus'
+
                                 if raw_data["info"]["gameMode"] == "STRAWBERRY": # THIS IS Straw game mode
                                     try:
                                         players = []
@@ -1120,6 +1136,9 @@ class LolGames(commands.Cog):
                                     await asyncio.sleep(1.9)
                                     file = discord.File(f"{FILES_PATH}arena_output.png", filename=f"Arena.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
+                                    embed.set_footer(text=footer)
+                                    embed.set_thumbnail(url=summoner_icon_url)
+                                    embed.set_author(name=long_name, icon_url=summoner_icon_url)
                                     embed.set_image(url=f"attachment://Arena.png")
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                     channel = self.bot.get_channel(1112233401286672394)
@@ -1165,12 +1184,15 @@ class LolGames(commands.Cog):
                                     await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, player_list, results, bans, mentions)
                                     file = discord.File(f"{FILES_PATH}{mentions}-game.png", filename=f"Game.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
+                                    embed.set_footer(text=footer)
+                                    embed.set_thumbnail(url=champion_icon_url)
+                                    embed.set_author(name=long_name, icon_url=summoner_icon_url)
                                     embed.set_image(url=f"attachment://Game.png")
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                     if raw_data["info"]["platformId"] == "OC1": _region = "oce"
                                     elif raw_data["info"]["platformId"].upper() == "EUW1": _region = "euw"
                                     else: _region = raw_data["info"]["platformId"].lower()
-                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}", embed=embed))
+                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}"))
                                     os.remove(f"{FILES_PATH}{mentions}-game.png")
                                     await save_new_match(last_match, puuid)
                                     continue
