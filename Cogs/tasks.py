@@ -4,6 +4,7 @@ from .utils.path import ANNONCE_AVATAR_PATH, DB_PATH_2 as wamland_db_path
 from asyncio import sleep
 from bs4 import BeautifulSoup
 import discord, time, datetime, json, re
+from traceback import format_exc
 from io import BytesIO
 from PIL import Image
 from aiohttp import ClientSession
@@ -245,7 +246,7 @@ class Tasks(commands.Cog):
 
             to_wait = seconds_until(5, 55)
             await sleep(to_wait)
-            losers = await get_streak_file()
+            # losers = await get_streak_file()
             self.bot.day_vocal_time = {} # reset daily vocal time
         except Exception as e:
             LogErrorInWebhook()
@@ -401,123 +402,129 @@ class Tasks(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def rencontres_nc(self):
-        POSTS_URLS = ["homme-femme-5", "femme-homme-5", "transexuels-5", "homme-homme-5","plan-q-5", "travesti-5"]
-        POST_ENDP = "https://api.annonces.nc/posts"
-        handler = RencontreNc(pool=self.bot.pool, session=self.bot.session)
-        nums_found = []
-        channel = await self.bot.fetch_channel(1211607454400651264)
-        sent = 0
-        pattern = re.compile(r'\b(\d{2})[ ,.]?(\d{2})[ ,.]?(\d{2})\b')
-        if channel:
-            for post_url in POSTS_URLS:
-                async with self.bot.session.get(f'https://api.annonces.nc/posts?by_category={post_url}&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1') as resp:
-                    data = await resp.json()
-                if data:
-                    for post in data:
-                        async with self.bot.session.get(f'{POST_ENDP}/{post["slug"]}') as post_resp:
-                            post_data = await post_resp.json()
-                        if post_data:
-                            texte = post_data["description"]
-                            titre = post_data["title"]
-                            idx = post_data["id"]
-                            user_id = post_data["user_id"]
-                            cat = post_data['category']['name']
-                            is_in = await handler.is_in(idx)
-
-                            attempts = 0
-                            while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 3:
-                                status = await handler.download_image(user_id)
-                                if status:
-                                    break
-                                else:
-                                    print(f"Image not downloaded for user {user_id}, attempt {attempts + 1}")
-                                    await sleep(1)
-                                attempts += 1
-
-                            
-                            if not is_in:
-                                if len(texte) < 4096:
-                                    embed = create_embed(title="", description=f"# {titre}\n\n{texte}\n\n## Catégorie: {cat}")
-                                    local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
-                                    if handler.is_image_downloaded(userid=str(user_id)):
-                                        embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
-                                        with open(local_icon_path, "rb") as f:
-                                            file = discord.File(f, filename=f"{user_id}.webp")
-                                    else:
-                                        file = None
-                                        embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
-                                    medias = []
-                                    if post_data.get("medias"):
-                                        for media in post_data["medias"]:
-                                            if 'large' in media['versions']:
-                                                embed.set_image(url=media['versions']['large']['url'])
-                                                medias.append(media['versions']['large']['url'])
-                                                break
-                                    if file:
-                                        await channel.send(embed=embed, file=file)
+        try:
+            POSTS_URLS = ["homme-femme-5", "femme-homme-5", "transexuels-5", "homme-homme-5","plan-q-5", "travesti-5"]
+            POST_ENDP = "https://api.annonces.nc/posts"
+            handler = RencontreNc(pool=self.bot.pool, session=self.bot.session)
+            nums_found = []
+            channel = await self.bot.fetch_channel(1211607454400651264)
+            sent = 0
+            pattern = re.compile(r'\b(\d{2})[ ,.]?(\d{2})[ ,.]?(\d{2})\b')
+            if channel:
+                for post_url in POSTS_URLS:
+                    async with self.bot.session.get(f'https://api.annonces.nc/posts?by_category={post_url}&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1') as resp:
+                        data = await resp.json()
+                    if data:
                         db_entries = await self._get_wamland_entries()
+                        for post in data:
+                            async with self.bot.session.get(f'{POST_ENDP}/{post["slug"]}') as post_resp:
+                                post_data = await post_resp.json()
+                            if post_data:
+                                texte = post_data["description"]
+                                titre = post_data["title"]
+                                idx = post_data["id"]
+                                user_id = post_data["user_id"]
+                                cat = post_data['category']['name']
+                                is_in = await handler.is_in(idx)
+
+                                attempts = 0
+                                while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 3:
+                                    status = await handler.download_image(user_id)
+                                    if status:
+                                        break
                                     else:
-                                        await channel.send(embed=embed)
-                                await handler.save(idx, texte, titre, cat)
-                                nums_found += pattern.findall(texte)
-                                sent += 1
+                                        print(f"Image not downloaded for user {user_id}, attempt {attempts + 1}")
+                                        await sleep(1)
+                                    attempts += 1
+
+                                
+                                if not is_in:
+                                    if len(texte) < 4096:
                                         footer = {"text": f"Annonce récupérée depuis rencontres.nc | Total annonces scrappées: {afficher_nombre_fr(db_entries + sent + 1)}", "icon_url": "https://i.imgur.com/z4xVgQp.png"}
                                         embed = create_embed(title="", description=f"# {titre}\n\n{texte}\n\n## Catégorie: {cat}", footer=footer)
+                                        local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
+                                        if handler.is_image_downloaded(userid=str(user_id)):
+                                            embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
+                                            with open(local_icon_path, "rb") as f:
+                                                file = discord.File(f, filename=f"{user_id}.webp")
+                                        else:
+                                            file = None
+                                            embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
+                                        medias = []
+                                        if post_data.get("medias"):
+                                            for media in post_data["medias"]:
+                                                if 'large' in media['versions']:
+                                                    embed.set_image(url=media['versions']['large']['url'])
+                                                    medias.append(media['versions']['large']['url'])
+                                                    break
+                                        if file:
+                                            await channel.send(embed=embed, file=file)
+                                        else:
+                                            await channel.send(embed=embed)
+                                    await handler.save(idx, texte, titre, cat)
+                                    nums_found += pattern.findall(texte)
+                                    sent += 1
+        except Exception as e:
+            LogErrorInWebhook(error=f"[RENCONTRES NC TASK] {e}\n{format_exc()}")
 
     @tasks.loop(minutes=20)
     async def informatique(self):
-        handler = Informatique(pool=self.bot.pool, session=self.bot.session)
-        channel = await self.bot.fetch_channel(1336339577757106276)
-        async with self.bot.session.get("https://api.annonces.nc/posts?by_category=informatique-1&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1") as resp:
-            data = await resp.json()
-        if data:
-            for post in data:
-                async with self.bot.session.get(f'https://api.annonces.nc/posts/{post["slug"]}') as post_resp:
-                    post_data = await post_resp.json()
-                if post_data:
-                    texte = post_data["description"]
-                    titre = post_data["title"]
-                    idx = post_data["id"]
-                    user_id = post_data["user_id"]
-                    prix = post_data["price"]
-                    if prix: prix = f"{afficher_nombre_fr(int(prix))} XPF"
-                    else : prix = "non renseigné"
-                    is_in = await handler.is_in(idx)
-
-                    attempts = 0
-                    while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 5:
-                        status = await handler.download_image(user_id)
-                        if status:
-                            break
-                        attempts += 1
-
-                    raw_field = f"# {titre}\n\n{texte}\n\n## Prix: {prix}"
-                    if not is_in:
-                        if len(raw_field) < 4096:
-                            embed = create_embed(title="", description=raw_field)
-                            local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
-                            if handler.is_image_downloaded(userid=str(user_id)):
-                                embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
-                                with open(local_icon_path, "rb") as f:
-                                    file = discord.File(f, filename=f"{user_id}.webp")
-                            else:
-                                file = None
-                                embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
-                            medias = []
-                            if post_data.get("medias"):
-                                for media in post_data["medias"]:
-                                    if 'large' in media['versions']:
-                                        embed.set_image(url=media['versions']['large']['url'])
-                                        medias.append(media['versions']['large']['url'])
-                                        break
-                            if file:
-                                await channel.send(embed=embed, file=file)
-                            else:
-                                await channel.send(embed=embed)
-                        await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
+        try:
+            handler = Informatique(pool=self.bot.pool, session=self.bot.session)
+            channel = await self.bot.fetch_channel(1336339577757106276)
+            async with self.bot.session.get("https://api.annonces.nc/posts?by_category=informatique-1&per=40&sort=-published_at&by_locality=nouvelle-caledonie&page=1") as resp:
+                data = await resp.json()
+            if data:
                 db_entries = await self._get_wamland_entries()
+                sent = 0
+                for post in data:
+                    async with self.bot.session.get(f'https://api.annonces.nc/posts/{post["slug"]}') as post_resp:
+                        post_data = await post_resp.json()
+                    if post_data:
+                        texte = post_data["description"]
+                        titre = post_data["title"]
+                        idx = post_data["id"]
+                        user_id = post_data["user_id"]
+                        prix = post_data["price"]
+                        if prix: prix = f"{afficher_nombre_fr(int(prix))} XPF"
+                        else : prix = "non renseigné"
+                        is_in = await handler.is_in(idx)
+
+                        attempts = 0
+                        while not handler.is_image_downloaded(userid=str(user_id)) and attempts < 5:
+                            status = await handler.download_image(user_id)
+                            if status:
+                                break
+                            attempts += 1
+
+                        raw_field = f"# {titre}\n\n{texte}\n\n## Prix: {prix}"
+                        if not is_in:
+                            if len(raw_field) < 4096:
                                 footer = {"text": f"Annonce récupérée depuis annonces.nc | Total annonces scrappées: {afficher_nombre_fr(db_entries + sent + 1)}", "icon_url": "https://i.imgur.com/z4xVgQp.png"}
                                 embed = create_embed(title="", description=raw_field, footer=footer)
+                                local_icon_path = f"{ANNONCE_AVATAR_PATH}/{user_id}.webp"
+                                if handler.is_image_downloaded(userid=str(user_id)):
+                                    embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url=f"attachment://{user_id}.webp")
+                                    with open(local_icon_path, "rb") as f:
+                                        file = discord.File(f, filename=f"{user_id}.webp")
+                                else:
+                                    file = None
+                                    embed.set_author(name=f"Annonce n°{post_data['id']} par l'utilisateur n°{user_id}", url=post_data["link_url"], icon_url="https://annonces.nc/assets/images/sites/annonces.png")
+                                medias = []
+                                if post_data.get("medias"):
+                                    for media in post_data["medias"]:
+                                        if 'large' in media['versions']:
+                                            embed.set_image(url=media['versions']['large']['url'])
+                                            medias.append(media['versions']['large']['url'])
+                                            break
+                                if file:
+                                    await channel.send(embed=embed, file=file)
+                                else:
+                                    await channel.send(embed=embed)
+                            await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
+                            sent += 1
+        except Exception as e:
+            LogErrorInWebhook(error=f"[INFORMATIQUE TASK] {e} \n{format_exc()}")
 
     @tasks.loop(time=datetime.time(10, 0, 0, tzinfo=ZoneInfo("Europe/Paris")))
     async def lol_patch_notes(self):
