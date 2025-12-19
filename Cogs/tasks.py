@@ -1,6 +1,6 @@
 from .utils.functions import LogErrorInWebhook, afficher_nombre_fr, format_duration, load_json_data, create_embed, seconds_until, write_item, convert_txt_to_colored,getVar
 from .utils.data import interests_indexs, interests_infos
-from .utils.path import ANNONCE_AVATAR_PATH
+from .utils.path import ANNONCE_AVATAR_PATH, DB_PATH_2 as wamland_db_path
 from asyncio import sleep
 from bs4 import BeautifulSoup
 import discord, time, datetime, json, re
@@ -11,7 +11,8 @@ from discord.ext import tasks, commands
 from .utils.classes import Trapardeur
 from bot import Trapard
 from zoneinfo import ZoneInfo
-from asqlite import Pool
+from asqlite import Pool, connect as asqlite_connect
+
 
 APIKEY = getVar("CRYPTO_API")
 
@@ -129,6 +130,14 @@ class Tasks(commands.Cog):
         self.rencontres_nc.start()
         self.informatique.start()
         self.lol_patch_notes.start()
+
+    async def _get_wamland_entries(self) -> int:
+        async with asqlite_connect(wamland_db_path) as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("SELECT COUNT(*) FROM annonces")
+                result = await cursor.fetchone()
+                return int(result[0])
+        return 0
 
     @tasks.loop(minutes=1)
     async def update_status(self):
@@ -446,11 +455,14 @@ class Tasks(commands.Cog):
                                                 break
                                     if file:
                                         await channel.send(embed=embed, file=file)
+                        db_entries = await self._get_wamland_entries()
                                     else:
                                         await channel.send(embed=embed)
                                 await handler.save(idx, texte, titre, cat)
                                 nums_found += pattern.findall(texte)
                                 sent += 1
+                                        footer = {"text": f"Annonce récupérée depuis rencontres.nc | Total annonces scrappées: {afficher_nombre_fr(db_entries + sent + 1)}", "icon_url": "https://i.imgur.com/z4xVgQp.png"}
+                                        embed = create_embed(title="", description=f"# {titre}\n\n{texte}\n\n## Catégorie: {cat}", footer=footer)
 
     @tasks.loop(minutes=20)
     async def informatique(self):
@@ -503,6 +515,9 @@ class Tasks(commands.Cog):
                             else:
                                 await channel.send(embed=embed)
                         await handler.save(idx, user_id, texte, titre, medias, post_data["created_at"])
+                db_entries = await self._get_wamland_entries()
+                                footer = {"text": f"Annonce récupérée depuis annonces.nc | Total annonces scrappées: {afficher_nombre_fr(db_entries + sent + 1)}", "icon_url": "https://i.imgur.com/z4xVgQp.png"}
+                                embed = create_embed(title="", description=raw_field, footer=footer)
 
     @tasks.loop(time=datetime.time(10, 0, 0, tzinfo=ZoneInfo("Europe/Paris")))
     async def lol_patch_notes(self):
