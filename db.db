@@ -40,25 +40,8 @@ CREATE TABLE LoLGamesTracker (
     userId TEXT NOT NULL,
     ign TEXT NOT NULL,
     puuid TEXT NOT NULL,
-    region TEXT NOT NULL,
-    rank TEXT NOT NULL DEFAULT 'Unranked',
-    rank_tier TEXT NOT NULL DEFAULT 'Unranked',
-    league_points INTEGER NOT NULL DEFAULT 0,
-    last_game_id TEXT NOT NULL DEFAULT '0',
-    champions_mastery TEXT DEFAULT '{}'
-);
-UPDATE LoLGamesTracker SET last_game_id = '0' WHERE puuid = 'NA';
-
-CREATE TABLE LoLChampionsMastery (
-    id INTEGER PRIMARY KEY,
-    champion_id INTEGER NOT NULL,
-    puuid TEXT NOT NULL,
-    mastery_level INTEGER NOT NULL,
-    mastery_points INTEGER NOT NULL,
-    points_since_last_level INTEGER NOT NULL,
-    points_until_next_level INTEGER NOT NULL
-);
-
+    region TEXT NOT NULL
+, last_game_id TEXT NOT NULL DEFAULT '0', champions_mastery TEXT DEFAULT '{}');
 CREATE TABLE LikedSongs (
     id INTEGER PRIMARY KEY,
     userId TEXT NOT NULL,
@@ -180,17 +163,4 @@ CREATE TABLE Annonces_nc_Informatique (
     texte TEXT,
     medias TEXT,
     created_at INTEGER
-);
-CREATE TABLE autoplay (
-    id INTEGER PRIMARY KEY,
-    pos INTEGER,
-    duree INTEGER,
-    name TEXT,
-    artiste TEXT,
-    downloader INTEGER,
-    thumbnail TEXT,
-    channel_avatar TEXT,
-    likes INTEGER,
-    views INTEGER,
-    video_id TEXT
 );

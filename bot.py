@@ -1,6 +1,7 @@
 from discord.ext import commands
 import discord, aiohttp, datetime, random, traceback
 from time import perf_counter
+from traceback import format_exception
 from collections import Counter
 import concurrent.futures
 from Cogs.utils.context import Context
@@ -9,7 +10,7 @@ import asqlite, logging
 from typing import Dict, TYPE_CHECKING
 from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler
 from Cogs.utils.data import FULL_EMOJIS_LIST
-from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calc_usr_gain_by_tier, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar
+from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar, calc_usr_gain_by_tier, fetch_diplay_name
 from Cogs.utils.path import DB_PATH, DB_PATH_2
 from asyncio import sleep
 import asyncio, openai, wavelink, time # type: ignore
@@ -159,7 +160,7 @@ class Trapard(commands.Bot):
                 await self.load_extension(extension)
                 print(f"Loading {extension}")
             except Exception as e:
-                LogErrorInWebhook(f'Failed to load extension {extension}.', )
+                LogErrorInWebhook(f'Failed to load extension {extension}.\n\n{"".join(format_exception(e))}', )
                 log.exception('Failed to load extension %s.', extension)
                 if DEBUG:
                     print(f'Failed to load extension {extension}.\n{e}')

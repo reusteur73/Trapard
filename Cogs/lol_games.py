@@ -1,9 +1,8 @@
-import discord, os, datetime, io, traceback, asyncio, difflib
+import discord, os, io, traceback, asyncio, difflib
 from discord.ext import commands, tasks
-from typing import TYPE_CHECKING, Tuple, List
-from PIL import ImageDraw, ImageFont, Image
-from .utils.functions import afficher_nombre_fr, display_big_nums, LogErrorInWebhook, calc_usr_gain_by_tier, getVar, command_counter
-from .utils.path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA 
+from .utils.functions import afficher_nombre_fr, LogErrorInWebhook, getVar
+from .utils.path import FILES_PATH
+from .utils.RiotCore import RiotAPI, RiotAssetsAPI, LolGameDrawer
 from bot import Trapard
 
 def get_riot_api_headers():
@@ -16,605 +15,29 @@ def get_riot_api_headers():
         "X-Riot-Token": getVar("RIOT_API")
     }
 
-async def get_puuid_by_name(ign: str, gameTag:str, bot: Trapard):
-    """Fetches the PUUID of a League of Legends summoner using their in-game name and game tag.
-        gameTag (str): The game tag associated with the summoner.
-        bot (Trapard): The bot instance containing the HTTP session.
-    Returns:
-        str or None: The PUUID of the summoner if found, otherwise None.
-    Raises:
-        Logs exceptions internally and returns None if an error occurs during the request or response parsing.
-    """
-    try:
-        summoner_url = f"https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{ign}/{gameTag}"
-        async with bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
-            summoner_data = await summoner_response.json()
-        if "puuid" not in summoner_data:
-            print(summoner_data, "No puuid", ign, gameTag, summoner_url)
-            return None
-        return summoner_data["puuid"]
-    except Exception as e:
-        LogErrorInWebhook(error=f"[GET PUUID BY NAME] {e} NAME={ign}, response = {summoner_data}, url = {summoner_url}")
-        return None
-
-class Mastery:
-    async def get_all_mastery(puuid: str, region: str, bot: Trapard):
-        """
-        Get all the mastery of a user from a **puuid** and a region from the **database**
-        """
-        try:
-            if region == "euw": region += "1"
-            summoner_url = f"https://{region}.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}"
-            async with bot.session.get(summoner_url, headers=get_riot_api_headers()) as summoner_response:
-                summoner_data = await summoner_response.json()
-            return summoner_data
-        except Exception as e:
-            LogErrorInWebhook(error=f"[GET ALL MASTERY] {e} NAME={puuid}, response = {summoner_data}, url = {summoner_url}")
-            return None
-
-    async def update_user_mastery(mastery: dict, bot: Trapard):
-        """
-            Update the mastery of a user in the **database** from a **mastery** dictionary
-        """
-        try:
-            async with bot.pool.acquire() as conn:
-                await conn.execute("UPDATE LoLGamesTracker SET champions_mastery = ? WHERE puuid = ?", str(mastery), mastery[0]["puuid"])
-        except Exception as e:
-            LogErrorInWebhook(error=f"[UPDATE USER MASTERY] {e} NAME={mastery[0]['puuid']}")
-            return None
-
-    async def get_champion_mastery(puuid: str, region: str, champion_id: int, bot: Trapard):
-        """
-        Get the mastery of a **specific champion** for a user from a **puuid** and a region from the **database**
-        """
-        try:
-            async with bot.pool.acquire() as conn:
-                data = await conn.fetchone("SELECT champions_mastery FROM LoLGamesTracker WHERE puuid = ?", puuid)
-            if not data:
-                return None
-            print(data)
-            mastery = eval(data[0])
-            for champ in mastery:
-                if champ["championId"] == champion_id:
-                    return dict(champ)
-            return None
-        except Exception as e:
-            LogErrorInWebhook(error=f"[GET CHAMPION MASTERY] {e} NAME={puuid}")
-            return None
-
 class GameLink(discord.ui.View):
     def __init__(self, link: str="N/A", embed=None):
         super().__init__(timeout=None)
         self.embed = embed
         self.add_item(discord.ui.Button(label="Voir plus", url=link))
 
-    @discord.ui.button(label='Trapcoins', style=discord.ButtonStyle.green, custom_id="gain")
-    async def gains(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.embed:
-            await interaction.response.send_message(embed=self.embed, ephemeral=True)
-        else:
-            await interaction.response.send_message("Malheureusement, ce bouton n'est plus disponible.", ephemeral=True)
-
 class LolGames(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
         self.bot = bot
+        self.riot_api = RiotAPI(bot.session)
+        self.riot_assets_api = RiotAssetsAPI(bot.session)
+        self.lol_game_drawer = LolGameDrawer()
+
+        self.ongoing_games = {}
+
         self.check_lol_games.start()
+        self.current_game_lol_tracker.start()
 
     @tasks.loop(seconds=300)
     async def check_lol_games(self):
         try:
             async with self.bot.pool.acquire() as conn:
                 data = await conn.fetchall("SELECT id, userId, ign, puuid, region, last_game_id FROM LoLGamesTracker")
-
-            if self.bot.debug:
-                for row in data:
-                    print(dict(row))
-
-            def draw_game(pseudo: str, rank: str, gameMode: str, championIcon, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, items: list, players: list, results: list, bans: list, mentions: str):
-                def draw_text(
-                    draw: ImageDraw.ImageDraw,
-                    text: str,
-                    coordinates: Tuple[int, int],
-                    box_size: Tuple[int, int],
-                    font: ImageFont.FreeTypeFont,
-                    fill: str,
-                ) -> None:
-                    text_width, text_height = draw.textlength(text, font=font), 24
-
-                    coordinates = (
-                        int(coordinates[0] + (box_size[0] - text_width) // 2),
-                        int(coordinates[1] + (box_size[1] - text_height) // 2),
-                    )
-
-                    draw.text(
-                        coordinates,
-                        text,
-                        font=font,
-                        fill=fill,
-                    )
-
-                def remove_white_background(image: Image.Image):
-
-                    # Convertir l'image en mode RGBA (ajoute un canal alpha pour la transparence)
-                    image = image.convert("RGBA")
-
-                    # Obtenir les données de l'image sous forme de liste de tuples (r, g, b, a)
-                    data = image.getdata()
-
-                    # Créer une nouvelle liste de données en rendant transparentes les pixels blancs
-                    new_data = []
-                    for item in data:
-                        # Si le pixel est blanc, le rendre transparent (alpha = 0)
-                        if item[:3] == (255, 255, 255):
-                            new_data.append((255, 255, 255, 0))
-                        else:
-                            new_data.append(item)
-
-                    # Mettre à jour les données de l'image
-                    image.putdata(new_data)
-
-                    return image
-
-                def add_corners(im, rad):
-                    circle = Image.new('L', (rad * 2, rad * 2), 0)
-                    draw = ImageDraw.Draw(circle)
-                    draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
-                    alpha = Image.new('L', im.size, 255)
-                    w, h = im.size
-                    alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
-                    alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
-                    alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
-                    alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
-                    im.putalpha(alpha)
-                    return im
-
-                img = Image.open(LOL_IMAGE)
-
-                # Images
-                if championIcon:
-                    avatar = add_corners(championIcon, 10).resize((100, 100))
-                    img.paste(avatar, (62, 129+72), avatar) # Champion Icon
-
-                if sums1:
-                    summoner1 = add_corners(sums1, 10).resize((31, 31))
-                    img.paste(summoner1, (99, 235+72), summoner1) # Summoner 1
-
-                if sums2:
-                    summoner2 = add_corners(sums2, 10).resize((31, 31))
-                    img.paste(summoner2, (132, 235+72), summoner2) # Summoner 2
-
-                if rune:
-                    rune = remove_white_background(rune).resize((35, 35))
-                    img.paste(rune, (62, 234+70), rune) # Rune
-                
-                if items[0]:
-                    item1 = add_corners(items[0], 10).resize((35, 35))
-                    img.paste(item1, (241, 256), item1) # Item 1
-                if items[1]:
-                    item2 = add_corners(items[1], 10).resize((35, 35))
-                    img.paste(item2, (281, 256), item2) # Item 2
-                if items[2]:
-                    item3 = add_corners(items[2], 10).resize((35, 35))
-                    img.paste(item3, (321, 256), item3) # Item 3
-                if items[3]:
-                    item4 = add_corners(items[3], 10).resize((35, 35))
-                    img.paste(item4, (241, 300), item4) # Item 4
-                if items[4]:
-                    item5 = add_corners(items[4], 10).resize((35, 35))
-                    img.paste(item5, (281, 300), item5) # Item 5
-                if items[5]:
-                    item6 = add_corners(items[5], 10).resize((35, 35))
-                    img.paste(item6, (321, 300), item6) # Item 6
-                if items[6]:
-                    item7 = add_corners(items[6], 10).resize((35, 35))
-                    img.paste(item7, (361, 300), item7) # Item 7
-
-
-                # Defining draw
-                draw = ImageDraw.Draw(img)
-                font = ImageFont.truetype(LOL_FONT, 18)
-                fontSmall = ImageFont.truetype(LOL_FONT, 15)
-                fontSmall2 = ImageFont.truetype(LOL_FONT, 12)
-                fontSmall3 = ImageFont.truetype(LOL_FONT, 10)
-
-                smalll = ImageFont.truetype(LOL_FONT, 8)
-                smalll2 = ImageFont.truetype(LOL_FONT, 7)
-
-                # Pseudo
-                if pseudo:
-                    draw_text(draw, pseudo, (35, 20+70), (155, 28), font, "white")
-
-                # Rank
-                if rank:
-                    draw_text(draw, rank, (34, 34+72), (165, 80), fontSmall, "white")
-
-                # GameMode
-                if gameMode:
-                    draw_text(draw, gameMode, (30, 68+71), (175, 90), fontSmall2, "white")
-
-                # Level
-                if lvl:
-                    draw_text(draw, str(lvl), (36, 289), (30, 30), fontSmall2, "white")
-                # draw_text(draw, lvl, (38, 217), (30, 30), fontSmall2, "white")
-
-                # Status
-                if status:
-                    draw_text(draw, status, (303, 32+71), (30, 30), font, f'green' if status == 'Victoire' else 'red')
-
-                # Time
-                if time:
-                    draw_text(draw, time, (303, 68+72), (30, 30), fontSmall3, "white")
-
-                # KDA
-                if kda:
-                    draw_text(draw, kda, (303, 92+71), (30, 30), fontSmall3, "white")
-
-                # Text1
-                if text1:
-                    draw_text(draw, text1, (303, 116+70), (30, 30), fontSmall3, "white")
-
-                # Text2
-                if text2:
-                    draw_text(draw, text2, (303, 137+72), (30, 30), fontSmall3, "white")
-
-
-
-                ###############################
-                ##TEMP PLAYER1 USE LOOP LATER #
-                ###############################
-                # Images
-
-                # Team 1
-                if results[0]:
-                    draw_text(draw, results[0], (35+422+67, 18), (155, 28), font, "green" if results[0] == 'Victoire' else 'red')
-                h_step = 65
-                for i, player in enumerate(players):
-                    if i > 4:
-                        break
-                    if player["championIcon"]:
-                        avatar = add_corners(player["championIcon"], 10).resize((35, 35))
-                        img.paste(avatar, (464, 63+(h_step*i)), avatar) # Champion Icon
-                    # avatar = add_corners(championIcon, 10).resize((100, 100))
-                    # img.paste(avatar, (62, 129+72), avatar) # Champion Icon
-
-                    if player["sums"][0]:
-                        summoner1 = add_corners(player["sums"][0], 10).resize((12, 12))
-                        img.paste(summoner1, (475, 101+(h_step*i)), summoner1) # Summoner 1
-                    
-                    if player["sums"][1]:
-                        summoner2 = add_corners(player["sums"][1], 10).resize((12, 12))
-                        img.paste(summoner2, (475+13, 101+(h_step*i)), summoner2) # Summoner 2
-
-                    if player["rune"]:
-                        rune = remove_white_background(player["rune"]).resize((12, 12))
-                        img.paste(rune, (475-13, 101+(h_step*i)), rune) # Rune
-                    if player["items"][0]:
-                        item1 = add_corners(player["items"][0], 10).resize((16, 17))
-                        img.paste(item1, (651, 63+(h_step*i)), item1) # Item 1
-                    if player["items"][1]:
-                        item2 = add_corners(player["items"][1], 10).resize((16, 17))
-                        img.paste(item2, (651+19, 63+(h_step*i)), item2) # Item 2
-                    if player["items"][2]:
-                        item3 = add_corners(player["items"][2], 10).resize((16, 17))
-                        img.paste(item3, (651+19+19, 63+(h_step*i)), item3) # Item 3
-                    if player["items"][3]:
-                        item4 = add_corners(player["items"][3], 10).resize((16, 17))
-                        img.paste(item4, (651, 63+20+(h_step*i)), item4) # Item 4
-                    if player["items"][4]:
-                        item5 = add_corners(player["items"][4], 10).resize((16, 17))
-                        img.paste(item5, (651+19, 63+20+(h_step*i)), item5) # Item 5
-                    if player["items"][5]:
-                        item6 = add_corners(player["items"][5], 10).resize((16, 17))
-                        img.paste(item6, (651+19+19, 63+20+(h_step*i)), item6) # Item 6
-                    if player["items"][6]:
-                        item7 = add_corners(player["items"][6], 10).resize((16, 17))
-                        img.paste(item7, (651+19+19+19, 63+20+(h_step*i)), item7) # Item 7
-
-                    # Pseudo
-                    if len(player["pseudo"]) > 7:
-                        draw_text(draw, player["pseudo"], (35+422, 90-26+(h_step*i)), (155, 28), smalll2, "white")
-                    else:
-                        draw_text(draw, player["pseudo"], (35+422, 90-26+(h_step*i)), (155, 28), smalll, "white")
-
-                    # Rank
-                    if player["rank"]:
-                        draw_text(draw, player["rank"], (34+420, 34+50-27+(h_step*i)), (165, 80), smalll, "white")
-
-                    # Level
-                    if player["lvl"]:
-                        draw_text(draw, str(player["lvl"]), (443, 92+(h_step*i)), (30, 30), smalll2, "white")
-                    # draw_text(draw, lvl, (38, 217), (30, 30), fontSmall2, "white")
-
-                    # KDA
-                    if player["kda"]:
-                        draw_text(draw, player["kda"], (595, 60+(h_step*i)), (30, 30), smalll, "white")
-
-                    # Text1
-                    if player["text1"]:
-                        draw_text(draw, player["text1"], (595, 74+(h_step*i)), (30, 30), smalll, "white")
-
-                    # Text2
-                    if player["text2"]:
-                        draw_text(draw, player["text2"], (595, 88+(h_step*i)), (30, 30), smalll, "white")
-
-                # Team 2
-                if results[1]:
-                    draw_text(draw, results[1], (35+422+67+275, 18), (155, 28), font, "green" if results[1] == 'Victoire' else 'red')
-                for i, player in enumerate(players):
-                    if i < 5:
-                        continue
-                    if player["championIcon"]:
-                        avatar = add_corners(player["championIcon"], 10).resize((35, 35))
-                        img.paste(avatar, (464+267+259, 63+(h_step*(i-5))), avatar) # Champion Icon
-                    # avatar = add_corners(championIcon, 10).resize((100, 100))
-                    # img.paste(avatar, (62, 129+72), avatar) # Champion Icon
-
-                    if player["sums"][0]:
-                        summoner1 = add_corners(player["sums"][0], 10).resize((12, 12))
-                        img.paste(summoner1, (475+526, 101+(h_step*(i-5))), summoner1) # Summoner 1
-                    
-                    if player["sums"][1]:
-                        summoner2 = add_corners(player["sums"][1], 10).resize((12, 12))
-                        img.paste(summoner2, (475+526-13, 101+(h_step*(i-5))), summoner2) # Summoner 2
-
-                    if player["rune"]:
-                        rune = remove_white_background(player["rune"]).resize((12, 12))
-                        img.paste(rune, (475+526+13, 101+(h_step*(i-5))), rune) # Rune
-
-                    if player["items"][0]:
-                        item1 = add_corners(player["items"][0], 10).resize((16, 17))
-                        img.paste(item1, (821, 63+(h_step*(i-5))), item1) # Item 1
-                    if player["items"][1]:
-                        item2 = add_corners(player["items"][1], 10).resize((16, 17))
-                        img.paste(item2, (821-19, 63+(h_step*(i-5))), item2) # Item 2
-                    if player["items"][2]:
-                        item3 = add_corners(player["items"][2], 10).resize((16, 17))
-                        img.paste(item3, (821-19-19, 63+(h_step*(i-5))), item3) # Item 3
-                    if player["items"][3]:
-                        item4 = add_corners(player["items"][3], 10).resize((16, 17))
-                        img.paste(item4, (821, 63+20+(h_step*(i-5))), item4) # Item 4
-                    if player["items"][4]:
-                        item5 = add_corners(player["items"][4], 10).resize((16, 17))
-                        img.paste(item5, (821-19, 63+20+(h_step*(i-5))), item5) # Item 5
-                    if player["items"][5]:
-                        item6 = add_corners(player["items"][5], 10).resize((16, 17))
-                        img.paste(item6, (821-19-19, 63+20+(h_step*(i-5))), item6) # Item 6
-                    if player["items"][6]:
-                        item7 = add_corners(player["items"][6], 10).resize((16, 17))
-                        img.paste(item7, (821-19-19-19, 63+20+(h_step*(i-5))), item7) # Item 7
-
-                    # Pseudo
-                    if len(player["pseudo"]) > 7:
-                        draw_text(draw, player["pseudo"], (35+422+267+150, 90-26+(h_step*(i-5))), (155, 28), smalll2, "white")
-                    else:
-                        draw_text(draw, player["pseudo"], (35+422+267+150, 90-26+(h_step*(i-5))), (155, 28), smalll, "white")
-
-                    # Rank
-                    if player["rank"]:
-                        draw_text(draw, player["rank"], (34+420+267+150, 34+50-27+(h_step*(i-5))), (165, 80), smalll, "white")
-
-                    # Level
-                    if player["lvl"]:
-                        draw_text(draw, str(player["lvl"]), (443+267+304, 92+(h_step*(i-5))), (30, 30), smalll2, "white")
-                    # draw_text(draw, lvl, (38, 217), (30, 30), fontSmall2, "white")
-
-                    # KDA
-                    if player["kda"]:
-                        draw_text(draw, player["kda"], (595+267, 60+(h_step*(i-5))), (30, 30), smalll, "white")
-
-                    # Text1
-                    if player["text1"]:
-                        draw_text(draw, player["text1"], (595+267, 74+(h_step*(i-5))), (30, 30), smalll, "white")
-
-                    # Text2
-                    if player["text2"]:
-                        draw_text(draw, player["text2"], (862, 88+(h_step*(i-5))), (30, 30), smalll, "white")
-
-                l_step = 30
-                sep = 108
-                for i, ban in enumerate(bans):
-                    if i < 5:
-                        if ban:
-                            try:
-                                ban = ban.resize((26, 26))
-                                img.paste(ban, (62+422+70+26+(l_step*i), 400-7), ban)
-                            except: continue
-                    else:
-                        if ban:
-                            try:
-                                ban = ban.resize((26, 26))
-                                img.paste(ban, (62+422+70+26+sep+(l_step*i), 400-7), ban)
-                            except: continue
-                # Saving image
-                fp = io.BytesIO()
-                img.convert("RGBA").save(fp, "PNG")
-                img.save(f"{FILES_PATH}{mentions}-game.png")
-                return
-            
-            def draw_swarm(players: List[dict], gamedata: dict):
-                def minutes_to_time(minutes: int) -> str:
-                    hours = minutes // 60
-                    mins = minutes % 60
-                    return f"{hours:02}:{mins:02}"
-
-                def draw_text(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
-                    text_width, text_height = draw.textlength(text, font=font), 24
-                    
-                    # Fixer la coordonnée x à celle de départ de la boîte pour aligner le texte à gauche
-                    x = coordinates[0]
-                    
-                    # Calculer la coordonnée y pour centrer verticalement le texte
-                    y = int(coordinates[1] + (box_size[1] - text_height) // 2)
-                    
-                    draw.text(
-                        (x, y),
-                        text,
-                        font=font,
-                        fill=fill,
-                    )
-                
-                def add_corners(im, rad):
-                    circle = Image.new('L', (rad * 2, rad * 2), 0)
-                    draw = ImageDraw.Draw(circle)
-                    draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
-                    alpha = Image.new('L', im.size, 255)
-                    w, h = im.size
-                    alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
-                    alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
-                    alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
-                    alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
-                    im.putalpha(alpha)
-                    return im
-                try:
-                    FONT = ImageFont.truetype(LOL_FONT)
-                    img = Image.open(f"{FILES_PATH}swarm{len(players)}.png")
-                    draw = ImageDraw.Draw(img)
-
-                    vert_decay = 202
-
-                    # draw game info
-                    if gamedata["winned"]:
-                        draw_text(draw, "Victoire", (220, 22), (0, 40), ImageFont.truetype(FONT, 40), "green")
-                    else:
-                        draw_text(draw, "Défaite", (220, 22), (0, 40), ImageFont.truetype(FONT, 40), "red")
-
-                    draw_text(draw, f"Durée: {minutes_to_time(gamedata['duration'])}", (425, 22), (0, 40), ImageFont.truetype(FONT, 40), "white")
-
-                    draw_text(draw, f"Map: {gamedata['map']}", (725, 22), (0, 40), ImageFont.truetype(FONT, 40), "white")
-
-                    # draw players
-                    for p_i, player in enumerate(players):
-                        player["championIcon"] = player["championIcon"].convert("RGBA")
-                        player["championIcon"] = add_corners(player["championIcon"], 15)
-                        player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
-                        img.paste(player["championIcon"], (57, 125+(vert_decay*p_i)), player["championIcon"])
-
-                        draw_text(draw, player["pseudo"], (200, 122+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{player['ig_lvl']}", (23, 216+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 29), "white")
-
-                        draw_text(draw, f"{afficher_nombre_fr(player['gold_earned'])}", (265, 171+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{afficher_nombre_fr(player['unit_killed'])}", (495, 120+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])}", (710, 119+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{afficher_nombre_fr(player['dmg_taken'])}", (710, 170+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{player['deaths']}", (525, 170+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        draw_text(draw, f"{afficher_nombre_fr(player['heal'])}", (710, 221+(vert_decay*p_i)), (0, 40), ImageFont.truetype(FONT, 25), "white")
-
-                        print(player["items"])
-                        for i, item in enumerate(player["items"]):
-                            if item:
-                                item = item.convert("RGBA")
-                                item = add_corners(item, 15)
-                                item = item.resize((50, 50), Image.LANCZOS)
-                                img.paste(item, (192 + 53 * i, 236+(vert_decay*p_i)), item)
-
-                    fp = io.BytesIO()
-                    img.convert("RGBA").save(fp, "PNG")
-                    img.save(f"{FILES_PATH}swarm_output.png")
-                    return f"{FILES_PATH}swarm_output.png"
-                except Exception as e:
-                    LogErrorInWebhook(error=f"[DRAW SWARM] {e}")
-                    print(e)
-                    return None
-
-            def draw_arena(player: dict):
-                def draw_text(draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
-                    text_width, text_height = draw.textlength(text, font=font), 24
-                    x = coordinates[0]
-                    y = int(coordinates[1] + (box_size[1] - text_height) // 2)
-                    
-                    draw.text(
-                        (x, y),
-                        text,
-                        font=font,
-                        fill=fill
-                    )
-                
-                def add_corners(im, rad):
-                    circle = Image.new('L', (rad * 2, rad * 2), 0)
-                    draw = ImageDraw.Draw(circle)
-                    draw.ellipse((0, 0, rad * 2 - 1, rad * 2 - 1), fill=255)
-                    alpha = Image.new('L', im.size, 255)
-                    w, h = im.size
-                    alpha.paste(circle.crop((0, 0, rad, rad)), (0, 0))
-                    alpha.paste(circle.crop((0, rad, rad, rad * 2)), (0, h - rad))
-                    alpha.paste(circle.crop((rad, 0, rad * 2, rad)), (w - rad, 0))
-                    alpha.paste(circle.crop((rad, rad, rad * 2, rad * 2)), (w - rad, h - rad))
-                    im.putalpha(alpha)
-                    return im
-                
-                FONT = LOL_FONT
-                img = Image.open(LOL_IMAGE_ARENA)
-                draw = ImageDraw.Draw(img)
-
-                # draw player name
-                if player["riotIdGameName"]:
-                    draw_text(draw, player["riotIdGameName"], (53, 79), (0, 40), ImageFont.truetype(FONT, 22), "white")
-
-                # draw kda
-                if player["kills"] and player["deaths"] and player["assists"]:
-                    draw_text(draw, f"{player['kills']}/{player['deaths']}/{player['assists']}", (385, 80), (0, 40), ImageFont.truetype(FONT, 22), "white")
-                    ratio = round((player["kills"] + player["assists"]) / max(1, player["deaths"]), 2)
-                    draw_text(draw, f"{ratio} KDA", (375, 80+38), (0, 40), ImageFont.truetype(FONT, 22), "white")
-
-                # draw damage dealt
-                if player["dmg_dealt"]:
-                    draw_text(draw, f"{afficher_nombre_fr(player['dmg_dealt'])} DMG", (355, 80+76), (0, 40), ImageFont.truetype(FONT, 22), "white")
-
-                # draw position
-                position_data = {
-                    1: ("#FFD700", "st"),
-                    2: ("#C0C0C0", "nd"),
-                    3: ("#CD7F32", "rd"),
-                    4: ("#4CAF50", "th"),
-                    5: ("#2196F3", "th"),
-                    6: ("#FF9800", "th"),
-                    7: ("#9C27B0", "th"),
-                    8: ("#F44336", "th"),
-                }
-                pos = max(1, min(player["PlayerScore0"], 8))
-                color, suffix = position_data[pos]
-                if player["PlayerScore0"]:
-                    draw_text(draw, f"{player['PlayerScore0']}{suffix}", (103, 268), (0, 40), ImageFont.truetype(FONT, 48), color)
-
-                # draw items
-                for i, item in enumerate(player["items"]):
-                    if not item:
-                        continue
-                    item = item.convert("RGBA")
-                    if i == 6:
-                        item = add_corners(item, 35)
-                    else:
-                        item = add_corners(item, 15)
-                    item = item.resize((40, 40), Image.LANCZOS)
-                    if i < 3:
-                        img.paste(item, (335 + 47 * i, 230), item)
-                    else:
-                        img.paste(item, (335 + 47 * (i-4)+46, 281), item)
-
-                # draw champion icon
-                if player["championIcon"]:
-                    player["championIcon"] = player["championIcon"].convert("RGBA")
-                    player["championIcon"] = add_corners(player["championIcon"], 15)
-                    player["championIcon"] = player["championIcon"].resize((115, 115), Image.LANCZOS)
-                    img.paste(player["championIcon"], (57, 141), player["championIcon"])
-
-                if player["mate_championIcon"]:
-                    player["mate_championIcon"] = player["mate_championIcon"].convert("RGBA")
-                    player["mate_championIcon"] = add_corners(player["mate_championIcon"], 15)
-                    player["mate_championIcon"] = player["mate_championIcon"].resize((55, 55), Image.LANCZOS)
-                    img.paste(player["mate_championIcon"], (179, 187), player["mate_championIcon"])
-
-                # save image
-                fp = io.BytesIO()
-                img.convert("RGBA").save(fp, "PNG")
-                img.save(f"{FILES_PATH}arena_output.png")
-                return f"{FILES_PATH}arena_output.png"
 
             def rang_le_plus_eleve(liste_rangs):
                 rangs_possibles = [
@@ -644,74 +67,32 @@ class LolGames(commands.Cog):
                 if region != "euw1":
                     region = "oc1"
                 # Requête pour obtenir les informations de classement du summoner
-                ranking_url = f"https://{region}.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}"
-                async with self.bot.session.get(ranking_url, headers=get_riot_api_headers()) as ranking_response:
-                    ranking_data = await ranking_response.json()
-                ranks = []
-                for i in ranking_data:
-                    if "tier" in i and "rank" in i:
-                        ranks.append(f"{i['tier'].lower()} {i['rank']}")
-                if len(ranks) > 1:
-                    return rang_le_plus_eleve(ranks)
-                elif len(ranks) == 0:
-                    return "Non classé"
-                else: 
-                    parts = str(ranks[0]).split()
-                    return f"{parts[0].title()} {parts[1].capitalize()}"
-
-            async def get_last_matchs(player_uuid, region):
-                if region == "oc1": subdom = "sea"
-                else: subdom = "europe"
-                resp = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/by-puuid/{player_uuid}/ids?start=0&count=2", headers=get_riot_api_headers())
-                try: data = await resp.json()
-                except Exception:
-                    text = await resp.text()
-                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération des dernières parties de {player_uuid} | réponse code : {resp.status} | réponse: {text}")
-                    return None
-                try: return data[0]
-                except: return None
-
-            async def getSumsByID(id: int, api_version: str):
-                async with self.bot.session.get(f"https://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/summoner.json") as response:
-                    data = await response.json()
-                    for summ in data["data"]:
-                        if data["data"][summ]["key"] == str(id):
-                            async with self.bot.session.get(f"http://ddragon.leagueoflegends.com/cdn/{api_version}/img/spell/{data['data'][summ]['image']['full']}") as response2:
-                                response2.raise_for_status()
-                                data2 = await response2.read()
-                            return Image.open(io.BytesIO(data2))
-            
-            async def getLastVersion():
-                async with self.bot.session.get(f"https://ddragon.leagueoflegends.com/api/versions.json") as response:
-                    data = await response.json()
-                    return data[0]
-            
-            async def getQueueByID(id: int):
-                match id:
-                    case 4250 | 4210: return "Doom Bots"
-                    case 480: return "Quick Play Draft"
-                async with self.bot.session.get(f"https://static.developer.riotgames.com/docs/lol/queues.json") as response:
-                    data = await response.json()
-                    for queue in data:
-                        if queue["queueId"] == id:
-                            return queue["description"]
-                    LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
-                    return "Mode de jeu inconnu"
+                ranking_data = await self.riot_api.get_player_league(puuid, region)
+                if ranking_data.status == 200:
+                    ranks = []
+                    for i in ranking_data.data:
+                        if "tier" in i and "rank" in i:
+                            ranks.append(f"{i['tier'].lower()} {i['rank']}")
+                    if len(ranks) > 1:
+                        return rang_le_plus_eleve(ranks)
+                    elif len(ranks) == 0:
+                        return "Non classé"
+                    else: 
+                        parts = str(ranks[0]).split()
+                        return f"{parts[0].title()} {parts[1].capitalize()}"
+                return "Non classé"
 
             async def get_match_data(matchid, player_uuid, region):
-                if region == "oc1": subdom = "sea"
-                else: subdom = "europe"
                 if matchid is None:
                     LogErrorInWebhook(error=f"[LOL 0x02] matchid est None pour le joueur {player_uuid}")
                     return None
-                reponse = await self.bot.session.get(f"https://{subdom}.api.riotgames.com/lol/match/v5/matches/{matchid}", headers=get_riot_api_headers())
-                if reponse.status != 200:
+                
+                data = await self.riot_api.get_match_data(matchid, region)
+                if data.data is None:
                     LogErrorInWebhook(error=f"[LOL 0x03] Erreur lors de la récupération des données de la partie {matchid} | réponse code : {reponse.status}")
                     return None
 
-                data = await reponse.json()
-                
-                try: participants = data["info"]["participants"]
+                try: participants = data.data["info"]["participants"]
                 except: return None
                 player_position = None
                 for index, p in enumerate(participants):
@@ -722,226 +103,13 @@ class LolGames(commands.Cog):
                     LogErrorInWebhook(error=f"[LOL 0x05] Impossible de trouver le joueur {player_uuid} dans la partie {matchid}")
                     return None
                 player_data = participants[player_position]
-                game_duartion = data["info"]["gameDuration"]
-                game_creation = data["info"]["gameCreation"]
+                game_duartion = data.data["info"]["gameDuration"]
+                game_creation = data.data["info"]["gameCreation"]
                 summoner_icon_id = player_data["profileIcon"]
                 long_name = f"{player_data['riotIdGameName']}#{player_data['riotIdTagline']}"
                 champion_id = player_data["championId"]
-                game_version = data["info"]["gameVersion"]
-                return player_data, game_duartion, game_creation, data["info"]["queueId"], data, summoner_icon_id, long_name, champion_id, game_version
-
-            def is_s(inte):
-                if inte >= 2:
-                    return 's'
-                else:
-                    return''
-
-            async def calculate_gain(game_data, game_duartion, userid):
-
-                text_data = ""
-                texte_to_send = None
-                trapcoins_emoji = "<:trapcoins:1108725845339672597>"
-                user_balance, _ = await self.bot.trapcoin_handler.get(userid=int(userid))
-                if game_data["win"] == True:
-                    base_gain = 50000
-                    text_data += f"- Victoire: 50 000 {str(trapcoins_emoji)}\n"
-                    if int(userid) in self.bot.lol_bet_dict and self.bot.lol_bet_dict[int(userid)] is not None:
-                        if self.bot.lol_bet_dict[int(userid)][0] == "Gagner":
-                            if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                await self.bot.trapcoin_handler.add(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
-                                texte_to_send = f"- 🤑 Tu as gagné **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Victoire**!"
-                            else:
-                                texte_to_send = f"- Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Victoire**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            self.bot.lol_bet_dict[int(userid)] = None
-                        else:
-                            if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                await self.bot.trapcoin_handler.remove(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
-                                texte_to_send = f"💸 - Tu as perdu **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Défaite** alors que tu as gagné!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            else:
-                                texte_to_send = f"Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Défaite**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            self.bot.lol_bet_dict[int(userid)] = None
-
-                if game_data["win"] == False:
-                    base_gain = 0
-                    if int(userid) in self.bot.lol_bet_dict and self.bot.lol_bet_dict[int(userid)] is not None:
-                        if self.bot.lol_bet_dict[int(userid)][0] == "Perdu":
-                            if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                await self.bot.trapcoin_handler.add(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
-                                texte_to_send = f"🤑 - Tu as gagné **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Défaite**!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            else:
-                                texte_to_send = f"- Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\n- Tu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Défaite**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            self.bot.lol_bet_dict[int(userid)] = None
-                        else:
-                            if user_balance >= int(self.bot.lol_bet_dict[int(userid)][1]):
-                                await self.bot.trapcoin_handler.remove(userid=int(userid), amount=int(self.bot.lol_bet_dict[int(userid)][1]), wallet="trapcoins")
-                                texte_to_send = f"💸 - Tu as perdu **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} en pariant sur une **Victoire** alors que tu as perdu!\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            else:
-                                texte_to_send = f"Tu as **{afficher_nombre_fr(user_balance)}** {str(trapcoins_emoji)}.\nTu as parié **{afficher_nombre_fr(int(self.bot.lol_bet_dict[int(userid)][1]))}** {str(trapcoins_emoji)} sur **Victoire**.\nTu n'avais donc pas les fonds requis.\nLe vote est annulé, la mise récuperée.\n\nRejoue avec la commande : </g-lol-bet:1116353246609551420>."
-                            self.bot.lol_bet_dict[int(userid)] = None
-                
-                pings = game_data["allInPings"] + game_data ["assistMePings"] + game_data["baitPings"] + game_data["basicPings"] + game_data["commandPings"] + game_data['dangerPings'] + game_data["enemyMissingPings"] + game_data["enemyVisionPings"] + game_data["getBackPings"] + game_data["holdPings"] + game_data['needVisionPings'] + game_data["pushPings"] + game_data['visionClearedPings'] + game_data["onMyWayPings"]
-                if pings > 0:
-                    pings_calc = pings * 200
-                    base_gain += pings
-                    text_data += f"- Ping {pings} fois: {afficher_nombre_fr(pings_calc)} {str(trapcoins_emoji)}\n"
-                
-                if game_data["kills"] > 0:
-                    kills_calc = game_data["kills"] * 3000
-                    base_gain += kills_calc
-                    text_data += f'- {game_data["kills"]} Kill{is_s(game_data["kills"])}: {afficher_nombre_fr(kills_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["assists"] > 0:
-                    assists_calc = game_data["assists"] * 2000
-                    base_gain += assists_calc
-                    text_data += f"- {game_data['assists']} Assistance{is_s(game_data['assists'])}: {afficher_nombre_fr(assists_calc)} {str(trapcoins_emoji)}\n"
-                if game_data["pentaKills"] > 0:
-                    penta_calc = game_data["pentaKills"] * 50000
-                    base_gain += penta_calc
-                    text_data += f"- {game_data['pentaKills']} Penta kills: {afficher_nombre_fr(penta_calc)} {str(trapcoins_emoji)}\n"
-                
-                if game_data["quadraKills"] > 0:
-                    quadra_calc = game_data["quadraKills"] * 40000
-                    base_gain += quadra_calc
-                    text_data += f'- {game_data["quadraKills"]} Quadra kills: {afficher_nombre_fr(quadra_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["tripleKills"] > 0:
-                    triple_calc = game_data["tripleKills"] * 30000
-                    base_gain += triple_calc
-                    text_data += f'- {game_data["tripleKills"]} Triple kills: {afficher_nombre_fr(triple_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["doubleKills"] > 0:
-                    double_calc = game_data["doubleKills"] * 20000
-                    base_gain += double_calc
-                    text_data += f'- {game_data["doubleKills"]} Double kills: {afficher_nombre_fr(double_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["visionScore"] > 0:
-                    vision_calc = game_data["visionScore"] * 1500
-                    base_gain += vision_calc
-                    text_data += f'- {game_data["visionScore"]} Score de vision: {afficher_nombre_fr(vision_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["visionWardsBoughtInGame"] > 0:
-                    control_ward_calc = game_data["visionWardsBoughtInGame"] * 1000
-                    base_gain += control_ward_calc
-                    text_data += f'- {game_data["visionWardsBoughtInGame"]} Control ward acheté: {afficher_nombre_fr(control_ward_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["turretTakedowns"] > 0:
-                    turret_calc = game_data["turretTakedowns"] * 5000
-                    base_gain += turret_calc
-                    text_data += f'- {game_data["turretTakedowns"]} Tour détruites: {afficher_nombre_fr(turret_calc)} {str(trapcoins_emoji)}\n'
-                
-                game_duartion_to_min = game_duartion / 60
-                cs_min = game_data["totalMinionsKilled"] / game_duartion_to_min
-                if cs_min >= 10:
-                    base_gain += 100000
-                    text_data += f"- 10 Cs/min: 100 000 {str(trapcoins_emoji)}\n"
-                elif cs_min < 10 and cs_min >= 9:
-                    base_gain += 75000
-                    text_data += f"- 9 Cs/min: 75 000 {str(trapcoins_emoji)}\n"
-                elif cs_min < 9 and cs_min >= 8:
-                    base_gain += 50000
-                    text_data += f"- 8 Cs/min: 50 000 {str(trapcoins_emoji)}\n"
-                elif cs_min < 8 and cs_min >= 7:
-                    base_gain += 25000
-                    text_data += f"- 7 Cs/min: 25 000 {str(trapcoins_emoji)}\n"
-                
-                spells_cast = game_data["spell1Casts"] + game_data["spell2Casts"] + game_data["spell3Casts"] + game_data["spell4Casts"]
-                spells_cast_calc = spells_cast * 100
-                base_gain += spells_cast_calc
-                text_data += f"- {spells_cast} Sorts invoqués: {afficher_nombre_fr(spells_cast_calc)} {str(trapcoins_emoji)}\n"
-                
-                if game_data["win"] and game_data["gameEndedInEarlySurrender"]:
-                    base_gain += 50000
-                    text_data += f"- Ennemi early ff: 50 000 {str(trapcoins_emoji)}\n"
-                
-                if game_data["firstBloodKill"]:
-                    base_gain += 15000
-                    text_data += f"- First blood: 15 000 {str(trapcoins_emoji)}\n"
-                
-                if game_data["firstTowerKill"]:
-                    base_gain += 10000
-                    text_data += f"- First tower: 10 000 {str(trapcoins_emoji)}\n"
-
-                base_gain += game_data["goldEarned"]
-                text_data += f'- Gold gagné: {afficher_nombre_fr(game_data["goldEarned"])} {str(trapcoins_emoji)}\n'
-
-                if game_data["objectivesStolen"] > 0:
-                    obj_stole_calc = game_data["objectivesStolen"] * 50000
-                    base_gain += obj_stole_calc
-                    text_data += f'- {game_data["objectivesStolen"]} Objectif volé: {afficher_nombre_fr(obj_stole_calc)} {str(trapcoins_emoji)}\n'
-                
-                if game_data["totalEnemyJungleMinionsKilled"] > 0:
-                    jg_stolen_calc = game_data["totalEnemyJungleMinionsKilled"] * 5000
-                    base_gain += jg_stolen_calc
-                    text_data += f'- {game_data["totalEnemyJungleMinionsKilled"]} Camps jg volé: {afficher_nombre_fr(jg_stolen_calc)} {str(trapcoins_emoji)}\n'
-
-                champ_lvl_calc = game_data["champLevel"] * 100
-                base_gain += champ_lvl_calc
-                text_data += f'- Level {game_data["champLevel"]} du champion: {afficher_nombre_fr(champ_lvl_calc)} {str(trapcoins_emoji)}\n'
-
-                if game_data["role"] == "JUNGLE":
-                    base_gain += 5000
-                    text_data += f"- Rôle Jungle compensation mental: 5 000 {str(trapcoins_emoji)}\n"
-
-                if game_data["role"] == "SUPPORT":
-                    base_gain += 5000
-                    text_data += f"- Rôle Support compensation mental: 5 000 {str(trapcoins_emoji)}\n"
-                
-                if game_data["teamEarlySurrendered"]:
-                    base_gain = base_gain * 0.5
-                    text_data += "- Early FF: Gain divisés par deux !\n"
-
-                return base_gain, text_data, game_data['riotIdGameName'], texte_to_send
-            
-            async def getRuneIcon(runeId: int, api_version: str) -> str:
-                RUNES_BASE_URL = 'http://ddragon.leagueoflegends.com/cdn/img/'
-                async with self.bot.session.get(f'http://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/runesReforged.json') as response:
-                    data = await response.json()
-                url = None
-                for rune_tree in data:
-                    if rune_tree['id'] == runeId:
-                        url = RUNES_BASE_URL + rune_tree['icon']
-                        break
-                    for slot in rune_tree['slots']:
-                        for rune in slot['runes']:
-                            if rune['id'] == runeId:
-                                url = RUNES_BASE_URL + rune['icon']
-                                break
-                if url:
-                    async with self.bot.session.get(url) as data:
-                        data.raise_for_status
-                        content = await data.read()
-                    return Image.open(io.BytesIO(content))
-                return None
-            
-            async def getChampionIconByID(championID: int, api_version, url=False) -> io.BytesIO:
-                _url = f"http://ddragon.leagueoflegends.com/cdn/{api_version}/data/en_US/champion.json"
-                async with self.bot.session.get(_url) as response:
-                    data = await response.json()
-                    for champ in data["data"]:
-                        if data["data"][champ]["key"] == str(championID):
-                            if url:
-                                return f"http://ddragon.leagueoflegends.com/cdn/{api_version}/img/champion/{data['data'][champ]['image']['full']}"
-                            return await getChampionIcon(data["data"][champ]["image"]["full"].replace(".png", ""), api_version)
-                    return None
-
-            async def getItemIcon(itemId: int, api_version) -> io.BytesIO:
-                if itemId == 0:
-                    return None
-                ITEMS_BASE_URL = f'http://ddragon.leagueoflegends.com/cdn/{api_version}/img/item/'
-                async with self.bot.session.get(f"{ITEMS_BASE_URL}{itemId}.png", ssl=False) as response:
-                    response.raise_for_status()
-                    data = await response.read()
-                return Image.open(io.BytesIO(data))
-            
-            async def getChampionIcon(championName: str, api_version) -> io.BytesIO:
-
-                async with self.bot.session.get(f'http://ddragon.leagueoflegends.com/cdn/{api_version}/img/champion/{championName}.png', ssl=False) as response:
-                    response.raise_for_status()
-                    champion_icon_data = await response.read()
-                return Image.open(io.BytesIO(champion_icon_data)).convert("RGBA")
-
-            async def get_profile_icon_url(iconId: int, api_version: str) -> str:
-                return f"http://ddragon.leagueoflegends.com/cdn/{api_version}/img/profileicon/{iconId}.png"
+                game_version = data.data["info"]["gameVersion"]
+                return player_data, game_duartion, game_creation, data.data["info"]["queueId"], data.data, summoner_icon_id, long_name, champion_id, game_version
 
             async def get_drawing_data(game_data, game_duartion, userid, queuetype, raw_data, puuid, region, api_version):
                 pseudo = game_data["riotIdGameName"]
@@ -956,14 +124,14 @@ class LolGames(commands.Cog):
                 kda = f'{game_data["kills"]}/{game_data["deaths"]}/{game_data["assists"]}'
                 
 
-                champion_icon = await getChampionIconByID(game_data["championId"], api_version)
+                champion_icon = await self.riot_assets_api.get_champion_icon_by_id(game_data["championId"], api_version)
                 
                 lvl = game_data["champLevel"]
                 
-                rune = await getRuneIcon(game_data["perks"]["styles"][0]["selections"][0]["perk"], api_version)
+                rune = await self.riot_assets_api.get_rune_icon(game_data["perks"]["styles"][0]["selections"][0]["perk"], api_version)
                 
-                sum1 = await getSumsByID(game_data["summoner1Id"], api_version)
-                sum2 = await getSumsByID(game_data["summoner2Id"], api_version)
+                sum1 = await self.riot_assets_api.get_summoner_spell_icon(game_data["summoner1Id"], api_version)
+                sum2 = await self.riot_assets_api.get_summoner_spell_icon(game_data["summoner2Id"], api_version)
                 
                 text1 = f'{game_data["totalMinionsKilled"]} cs - {round(game_data["goldEarned"] / 1000, 1)}{"k" if game_data["goldEarned"] / 1000 > 1 else ""} golds'
                 
@@ -981,7 +149,7 @@ class LolGames(commands.Cog):
 
                 items = []
                 for i in range(0, 7):
-                    items.append(await getItemIcon(game_data[f"item{i}"], api_version))
+                    items.append(await self.riot_assets_api.get_item_icon(game_data[f"item{i}"], api_version))
                 return pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items
 
             async def get_game_data(raw_data, api_version):
@@ -996,14 +164,14 @@ class LolGames(commands.Cog):
                         teamkills = raw_data["info"]["teams"][1]["objectives"]["champion"]["kills"]
                     items = []
                     for i in range(0, 7):
-                        items.append(await getItemIcon(participant[f"item{i}"], api_version))
+                        items.append(await self.riot_assets_api.get_item_icon(participant[f"item{i}"], api_version))
 
                     player["items"] = items
                     player["pseudo"] = participant["riotIdGameName"]
                     player["rank"] = await get_user_rank(participant["puuid"], raw_data["metadata"]["matchId"].split("_")[0].lower())
-                    player["championIcon"] = await getChampionIconByID(participant["championId"], api_version)
+                    player["championIcon"] = await self.riot_assets_api.get_champion_icon_by_id(participant["championId"], api_version)
                     player["lvl"] = participant["champLevel"]
-                    player["rune"] = await getRuneIcon(participant["perks"]["styles"][0]["selections"][0]["perk"], api_version)
+                    player["rune"] = await self.riot_assets_api.get_rune_icon(participant["perks"]["styles"][0]["selections"][0]["perk"], api_version)
                     player["kda"] = f'{participant["kills"]}/{participant["deaths"]}/{participant["assists"]}'
                     player["text1"] = f'{participant["totalMinionsKilled"]}cs - {round(participant["goldEarned"] / 1000, 1)}{"k" if participant["goldEarned"] / 1000 > 1 else ""} G'
                     kp = (participant["kills"] + participant["assists"]) * 100
@@ -1011,14 +179,14 @@ class LolGames(commands.Cog):
                         player["text2"] = f"0%KP - {participant['visionScore']} V"
                     else:
                         player["text2"] = f"{round( kp / teamkills, 1)}%KP - {participant['visionScore']} V"
-                    player["sums"] = [await getSumsByID(participant["summoner1Id"], api_version), await getSumsByID(participant["summoner2Id"], api_version)]
+                    player["sums"] = [await self.riot_assets_api.get_summoner_spell_icon(participant["summoner1Id"], api_version), await self.riot_assets_api.get_summoner_spell_icon(participant["summoner2Id"], api_version)]
                     output.append(player)
 
                 results = ["Victoire" if raw_data["info"]["teams"][0]["win"] else "Défaite", "Victoire" if raw_data["info"]["teams"][1]["win"] else "Défaite"]
                 bans = []
                 for team in raw_data["info"]["teams"]:
                     for ban in team["bans"]:
-                        bans.append(await getChampionIconByID(ban["championId"], api_version))
+                        bans.append(await self.riot_assets_api.get_champion_icon_by_id(ban["championId"], api_version))
                 return output, results, bans
 
             async def check_if_stored(matchId: str):
@@ -1116,13 +284,12 @@ class LolGames(commands.Cog):
                             try:
                                 id,mentions,ign,puuid,region,last_stored_match = row
                             except ValueError:
-                                print("row Error:", dict(row))
                                 LogErrorInWebhook()
                                 return
-                            last_match = await get_last_matchs(puuid, region)
+                            last_match = await self.riot_api.get_last_match_id(puuid, region)
                             if self.bot.debug:
                                 print(last_match, last_stored_match)
-                            if last_stored_match != last_match: # If the last match is different from the last stored match
+                            if (last_stored_match != last_match) and (last_match != "0"): # If the last match is different from the last stored match
                                 if last_match is None:
                                     LogErrorInWebhook(f"[LOL 0x04] Erreur lors de la récupération du dernier match pour le joueur `{ign}` ({puuid}).\nMatch None sauvegardé comme dernier match.")
                                     await save_new_match(last_match, puuid)
@@ -1130,20 +297,20 @@ class LolGames(commands.Cog):
                                 if mentions == "None":
                                     mentions = "?"
                                     tier_bonus = 0
-                                api_version = await getLastVersion()
+                                api_version = await self.riot_api.get_api_version()
                                 try:
                                     match_data, game_duration, game_creation, queuetype, raw_data, summoner_icon_id, long_name, champion_id, game_version = await get_match_data(last_match, puuid, region)
                                 except TypeError:
                                     await save_new_match(last_match, puuid)
                                     continue
-                                summoner_icon_url = await get_profile_icon_url(summoner_icon_id, api_version)
-                                champion_icon_url = await getChampionIconByID(champion_id, api_version, url=True)
+                                summoner_icon_url = self.riot_assets_api.get_profile_icon_url(summoner_icon_id, api_version)
+                                champion_icon_url = await self.riot_assets_api.get_champion_icon_by_id(champion_id, api_version, url=True)
                                 isStored = await check_if_stored(last_match)
                                 if not isStored:
                                     async with self.bot.pool.acquire() as conn:
                                         async with conn.transaction():
                                             await conn.execute("INSERT INTO lol_match_data (match_id, data) VALUES (?, ?)", (last_match, raw_data))
-                                queuetype = await getQueueByID(queuetype)
+                                queuetype = await self.riot_assets_api.get_queue_by_id(queuetype)
                                 saison, patch, patch2 = api_version.split(".")
                                 footer = f'Match {last_match.split("_")[1]} · {raw_data["info"]["platformId"]} · Patch {patch}.{patch2} · Saison {saison} · Game Version {game_version} · Powered by Riot API · Generated by reusreus'
                                 lp_change = None
@@ -1158,7 +325,7 @@ class LolGames(commands.Cog):
                                         for participant in raw_data["info"]["participants"]:
                                             player = {}
                                             player["pseudo"] = participant["riotIdGameName"]
-                                            player["championIcon"] = await getChampionIcon(str(participant["championName"]).replace("Strawberry_",""), api_version)
+                                            player["championIcon"] = await self.riot_assets_api.get_champion_icon(str(participant["championName"]).replace("Strawberry_",""), api_version)
                                             player["unit_killed"] = participant["totalMinionsKilled"]
                                             player["gold_earned"] = participant["goldEarned"]
                                             player["deaths"] = participant["deaths"]
@@ -1166,10 +333,10 @@ class LolGames(commands.Cog):
                                             player["dmg_taken"] = participant["totalDamageTaken"]
                                             player["dmg_dealt"] = participant["totalDamageDealt"]
                                             player["heal"] = participant["totalHeal"]
-                                            player["items"] = [await getItemIcon(participant[f'item{i}'], api_version) for i in range(0, 7)]
+                                            player["items"] = [await self.riot_assets_api.get_item_icon(participant[f'item{i}'], api_version) for i in range(0, 7)]
                                             players.append(player)
                                         
-                                        await asyncio.to_thread(draw_swarm, players, game_info)
+                                        await asyncio.to_thread(self.lol_game_drawer.draw_swarm, players, game_info)
                                         await asyncio.sleep(1.9)
                                         file = discord.File(f"{FILES_PATH}swarm_output.png", filename=f"Swarm.png")
                                         embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
@@ -1197,16 +364,16 @@ class LolGames(commands.Cog):
                                         if participant["PlayerScore0"] == match_data["PlayerScore0"] and participant["riotIdGameName"] != match_data["riotIdGameName"]:
                                             arena_player["mate_championIcon"] = participant["championId"]
                                             break
-                                    arena_player["championIcon"] = await getChampionIconByID(match_data["championId"], api_version)
-                                    arena_player["mate_championIcon"] = await getChampionIconByID(arena_player["mate_championIcon"], api_version)
+                                    arena_player["championIcon"] = await self.riot_assets_api.get_champion_icon_by_id(match_data["championId"], api_version)
+                                    arena_player["mate_championIcon"] = await self.riot_assets_api.get_champion_icon_by_id(arena_player["mate_championIcon"], api_version)
                                     arena_player["kills"] = match_data["kills"]
                                     arena_player["deaths"] = match_data["deaths"]
                                     arena_player["assists"] = match_data["assists"]
                                     arena_player["riotIdGameName"] = match_data["riotIdGameName"]
                                     arena_player["dmg_dealt"] = match_data["totalDamageDealtToChampions"]
                                     arena_player["PlayerScore0"] = match_data["PlayerScore0"]
-                                    arena_player["items"] = [await getItemIcon(match_data[f'item{i}'], api_version) for i in range(0, 7)]
-                                    await asyncio.to_thread(draw_arena, arena_player)
+                                    arena_player["items"] = [await self.riot_assets_api.get_item_icon(match_data[f'item{i}'], api_version) for i in range(0, 7)]
+                                    await asyncio.to_thread(self.lol_game_drawer.draw_arena, arena_player)
                                     await asyncio.sleep(1.9)
                                     file = discord.File(f"{FILES_PATH}arena_output.png", filename=f"Arena.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
@@ -1234,8 +401,8 @@ class LolGames(commands.Cog):
                                         for n, participant in enumerate(raw_data["info"]["participants"]):
                                             if participant["summonerId"] == "BOT":
                                                 player_list[n]["pseudo"] = str(participant["riotIdGameName"]).replace("Ruby_","").title().strip()
-                                                player_list[n]["championIcon"] = await getChampionIcon(str(participant["championName"]).replace("Ruby_",""), api_version)
-                                    await asyncio.to_thread(draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, player_list, results, bans, mentions)
+                                                player_list[n]["championIcon"] = await self.riot_assets_api.get_champion_icon(str(participant["championName"]).replace("Ruby_",""), api_version)
+                                    await asyncio.to_thread(self.lol_game_drawer.draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, player_list, results, bans, mentions)
                                     file = discord.File(f"{FILES_PATH}{mentions}-game.png", filename=f"Game.png")
                                     embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
                                     embed.set_footer(text=footer)
@@ -1263,6 +430,81 @@ class LolGames(commands.Cog):
 
         except Exception as e:
             LogErrorInWebhook()
+
+    @tasks.loop(seconds=45)
+    async def current_game_lol_tracker(self):
+        try:
+            api_version = await self.riot_api.get_api_version()
+            async with self.bot.pool.acquire() as conn:
+                data = await conn.fetchall("SELECT puuid, region, userId FROM LoLGamesTracker")
+            for row in data:
+                puuid = row[0]
+                region = row[1]
+                discord_user_id = row[2]
+                current_game = await self.riot_api.get_current_game(puuid, region)
+                if (current_game.status == 200) and (current_game.data is not None):
+                    try:
+                        if puuid in self.ongoing_games:
+                            if self.ongoing_games[puuid] == current_game.data["gameId"]:
+                                continue
+                        self.ongoing_games[puuid] = current_game.data["gameId"]
+                        players = []
+                        for participant in current_game.data["participants"]:
+                            rank_data = await self.riot_api.get_player_league(participant["puuid"], region)
+                            rank_tier = "Unranked"
+                            lp = 0
+                            if rank_data.data:
+                                entry = rank_data.data[0]
+                                if 'tier' in entry and 'rank' in entry and 'leaguePoints' in entry:
+                                    rank_tier = f"{entry['tier'].title()} {entry['rank'].upper()} ({entry['leaguePoints']} LP)"
+                            if rank_tier == "Unranked (0 LP)" or rank_tier == "Unranked":
+                                rank_tier = "Non classé"
+
+                            team_id = participant["teamId"]
+                            player_data = await self.riot_api.get_account_by_puuid(participant["puuid"], region)
+                            username = f"{player_data.data['gameName']}#{player_data.data['tagLine']}" if player_data.data and 'gameName' in player_data.data else "Mode Streamer"
+
+                            champions_name = await self.riot_assets_api.get_champion_name_by_id(participant["championId"], api_version)
+                            champions_name_clean = champions_name.lower().replace("'", "").replace(".", "").replace(" ", "_")
+                            champions_emoji = None
+                            for guild_id in [1464341094769885186,1464341347564781824,1464341600682377411,1464341853473345579]:
+                                guild = self.bot.get_guild(guild_id)
+                                if guild is not None:
+                                    champions_emoji = discord.utils.get(guild.emojis, name=champions_name_clean)
+                                    if champions_emoji and champions_emoji.id and champions_emoji.name:
+                                        print(f"[LOL TRACKER] Emoji trouvé pour le champion {champions_name_clean} dans la guilde {guild.name}.")
+                                        champions_emoji = f"<:{champions_emoji.name}:{champions_emoji.id}>"
+                                        break
+                            if champions_emoji is None:
+                                print(f"[LOL TRACKER] Aucun emoji trouvé pour le champion {champions_name_clean}, utilisation du nom du champion à la place.")
+                                champions_emoji = champions_name
+                            
+                            players.append({
+                                "username": username,
+                                "championId": participant["championId"],
+                                "champions_emoji": champions_emoji,
+                                "rank_tier": rank_tier,
+                                "team_id": team_id
+                            })
+                        user = await self.bot.fetch_user(discord_user_id)
+                        embed = discord.Embed(title="Partie en cours détectée", description=f"Une partie en cours a été détectée voici quelques informations...", color=0x2F3136)
+                        
+                        filed_team_1 =""
+                        filed_team_2 =""
+                        for p in players:
+                            if p["team_id"] == 100:
+                                filed_team_1 += f"\n- {p['champions_emoji']} **{p['username']}** - {p['rank_tier']}"
+                            else:
+                                filed_team_2 += f"\n- {p['champions_emoji']} **{p['username']}** - {p['rank_tier']}"
+                        embed.add_field(name="Équipe 1", value=filed_team_1, inline=True)
+                        embed.add_field(name="Équipe 2", value=filed_team_2, inline=True)
+                        await user.send(embed=embed)
+                    except Exception as e:
+                        traceback.print_exc()
+                        LogErrorInWebhook(f"[CURRENT GAME TRACKER] Erreur lors de l'envoi du message pour le joueur `{puuid}` et l'utilisateur Discord `{discord_user_id}`.\n {e}")
+        except Exception as e:
+            traceback.print_exc()
+            LogErrorInWebhook(f"[CURRENT GAME TRACKER] Erreur lors de la vérification des parties en cours.\n {e}")
 
     @commands.command()
     async def loltrack(self, ctx: commands.Context, *arg: str):
@@ -1293,7 +535,7 @@ class LolGames(commands.Cog):
             else:
                 userId = None
             tagLine = ign.split("#")[1]
-            puuid = await get_puuid_by_name(ign, tagLine, self.bot)
+            puuid = await self.riot_api.get_puuid_by_summoner_name(ign.split("#")[0], tagLine, region)
             if puuid is None:
                 return await ctx.send("Erreur lors de la récupération du puuid !")
             async with self.bot.pool.acquire() as conn:
@@ -1368,7 +610,7 @@ class LolGames(commands.Cog):
                         puuid = data[0][3]
                         region = data[0][4]
             else:
-                puuid = await get_puuid_by_name(pseudo, tagLine, self.bot)
+                puuid = await self.riot_api.get_puuid_by_summoner_name(pseudo, tagLine, region)
                 if puuid is None:
                     return await ctx.send(f"Erreur lors de la récupération du profil `{pseudo}` !")
             async with self.bot.session.get(f"https://ddragon.leagueoflegends.com/api/versions.json") as response:

@@ -3,6 +3,16 @@ import asqlite, discord, random, time, os
 from .functions import LogErrorInWebhook, getUserById
 from typing import Literal
 from asqlite import Pool
+from dataclasses import dataclass
+from typing import Any
+
+@dataclass
+class APIResponse:
+    """Represents a generic API response."""
+    status: int
+    data: Any
+    headers: dict
+
 
 class VideoDB:
     """Class to represent a video from the database."""

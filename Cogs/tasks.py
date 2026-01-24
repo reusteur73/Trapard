@@ -14,7 +14,6 @@ from bot import Trapard
 from zoneinfo import ZoneInfo
 from asqlite import Pool, connect as asqlite_connect
 
-
 APIKEY = getVar("CRYPTO_API")
 
 async def xp_calculation(user_id: str, pool: Pool):
