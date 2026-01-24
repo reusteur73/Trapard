@@ -1035,6 +1035,80 @@ class LolGames(commands.Cog):
                     async with conn.transaction():
                         await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (matchId, puuid))
 
+            async def save_champion_mastery(champion_id: int, puuid: str, region: str):
+                """Save or update the champion mastery for a player and return the points gained since last check."""
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        data = await conn.fetchone("SELECT mastery_points FROM LoLChampionsMastery WHERE puuid = ? AND champion_id = ?", (puuid, champion_id))
+                        if data is None:
+                            await conn.execute("INSERT INTO LoLChampionsMastery (champion_id, puuid, mastery_level, mastery_points, points_since_last_level, points_until_next_level) VALUES (?, ?, ?, ?, ?, ?)", (champion_id, puuid, 0, 0, 0, 0))
+                            data = 0
+                        else: 
+                            data = data['mastery_points']
+                        new_data = await self.riot_api.get_player_champion_mastery(puuid, region, champion_id)
+                        if new_data.data is not None:
+                            await conn.execute("UPDATE LoLChampionsMastery SET mastery_level = ?, mastery_points = ?, points_since_last_level = ?, points_until_next_level = ? WHERE puuid = ? AND champion_id = ?", (new_data.data['championLevel'], new_data.data['championPoints'], new_data.data['championPointsSinceLastLevel'], new_data.data['championPointsUntilNextLevel'], puuid, champion_id))
+                        return new_data.data['championPoints'] - data
+
+            async def track_ranked_progression(puuid: str, region: str):
+                """Track and update the ranked progression for a player and return the LP change since last check."""
+
+                def _process_lp_change(old_data: tuple, new_data: tuple) -> int:
+                    """olddata = (rank, rank_tier, league_points) | newdata = (rank, rank_tier, league_points)"""
+                    old_rank, old_tier, old_lp = old_data
+                    new_rank, new_tier, new_lp = new_data
+                    TIER_ORDER = {
+                        "IRON": 0,
+                        "BRONZE": 4,
+                        "SILVER": 8,
+                        "GOLD": 12,
+                        "PLATINUM": 16,
+                        "EMERALD": 20,
+                        "DIAMOND": 24,
+                        "MASTER": 28,
+                        "GRANDMASTER": 29,
+                        "CHALLENGER": 30,
+                    }
+                    DIVISION_ORDER = {
+                        "IV": 0,
+                        "III": 1,
+                        "II": 2,
+                        "I": 3,
+                    }
+                    
+                    def to_linear_lp(tier: str, division: str, lp: int) -> int:
+                        base = TIER_ORDER[tier] * 400
+
+                        if tier in ("MASTER", "GRANDMASTER", "CHALLENGER"):
+                            return base + lp
+
+                        return base + DIVISION_ORDER[division] * 100 + lp
+                    old_total_lp = to_linear_lp(old_rank, old_tier, old_lp)
+                    new_total_lp = to_linear_lp(new_rank, new_tier, new_lp)
+                    return new_total_lp - old_total_lp
+
+                async with self.bot.pool.acquire() as conn:
+                    async with conn.transaction():
+                        row = await conn.fetchone("SELECT rank, rank_tier, league_points FROM LoLGamesTracker WHERE puuid = ?", (puuid,))
+                        if row is None:
+                            await conn.execute("INSERT INTO LoLGamesTracker (puuid, rank, rank_tier, league_points) VALUES (?, ?, ?, ?)", (puuid, "Unranked", "Unranked", 0))
+                            row = {"rank": "Unranked", "rank_tier": "Unranked", "league_points": 0}
+                        api_rank = await self.riot_api.get_player_league(puuid, region)
+                        new_rank = None
+                        if api_rank.data is not None:
+                            for _ in api_rank.data:
+                                if _["queueType"] == "RANKED_SOLO_5x5":
+                                    new_rank = _
+                                    break
+                            if new_rank is not None:
+                                old_data = (row["rank"], row["rank_tier"], row["league_points"])
+                                new_data = (new_rank["tier"], new_rank.get("rank", "N/A"), new_rank["leaguePoints"])
+                                await conn.execute("UPDATE LoLGamesTracker SET rank = ?, rank_tier = ?, league_points = ? WHERE puuid = ?", (new_rank["tier"], new_rank.get("rank", "N/A"), new_rank["leaguePoints"], puuid))
+                                if old_data == ("Unranked", "Unranked", 0): return 0
+                                lp_change = _process_lp_change(old_data, new_data)
+                                return lp_change
+                        return 0
+
             async def task(data):
                 try:
                     trapcoins_emoji = "<:trapcoins:1108725845339672597>"
@@ -1072,7 +1146,7 @@ class LolGames(commands.Cog):
                                 queuetype = await getQueueByID(queuetype)
                                 saison, patch, patch2 = api_version.split(".")
                                 footer = f'Match {last_match.split("_")[1]} · {raw_data["info"]["platformId"]} · Patch {patch}.{patch2} · Saison {saison} · Game Version {game_version} · Powered by Riot API · Generated by reusreus'
-
+                                lp_change = None
                                 if raw_data["info"]["gameMode"] == "STRAWBERRY": # THIS IS Straw game mode
                                     try:
                                         players = []
@@ -1149,30 +1223,10 @@ class LolGames(commands.Cog):
                                         async with conn.transaction():
                                             await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
                                     continue
+                                elif raw_data["info"]["queueId"] == 420: # Ranked Solo/Duo
+                                    lp_change = await track_ranked_progression(puuid, region)
                                 try:
-                                    if mentions != "?":
-                                        gains, text, _, texte_to_send = await calculate_gain(match_data, game_duration, mentions)
-                                        tier_bonus = calc_usr_gain_by_tier(int(mentions))
-                                        await self.bot.trapcoin_handler.add(userid=int(mentions), amount=(int(gains)+tier_bonus), wallet="trapcoins")
-                                except:
-                                    gains = 0
-                                    text = ""
-                                    texte_to_send = ""
-                                    tier_bonus = 0
-                                    pass
-                                try:
-                                    # new_mastery_points = await Mastery.get_all_mastery(puuid = puuid, region = region, bot=self.bot)
-                                    # last_mastery_points = await Mastery.get_champion_mastery(puuid = puuid, region = region, champion_id = match_data["championId"], bot=self.bot)
-                                    # if new_mastery_points is not None:
-                                    #     await Mastery.update_user_mastery(new_mastery_points, self.bot)
-                                    # for champ in new_mastery_points:
-                                    #     if champ["championId"] == match_data["championId"]:
-                                    #         new_champ_master = champ["championPoints"]
-                                    #         break
-                                    text += f'\n- **Total game: {afficher_nombre_fr(gains)} {str(trapcoins_emoji)} gagnés**'
-                                    if texte_to_send is not None:
-                                        text += f"\n- {texte_to_send}"
-                                    text += f"\n- Bonus tier: {display_big_nums(tier_bonus)} {str(trapcoins_emoji)} || ({afficher_nombre_fr(tier_bonus)} {str(trapcoins_emoji)}) ||"                  
+                                    mastery_gain = await save_champion_mastery(int(champion_id), puuid, region)
                                     channel = self.bot.get_channel(1112233401286672394)
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
                                     player_list, results, bans = await get_game_data(raw_data, api_version)
