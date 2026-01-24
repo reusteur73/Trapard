@@ -1,7 +1,11 @@
 import discord, subprocess
+from io import BytesIO
+from PIL import Image
 from discord.ext import commands
 from bot import Trapard
 from .utils.functions import LogErrorInWebhook, write_item, load_json_data, create_embed
+from asyncio import sleep
+from Cogs.utils.RiotCore import RiotAPI, RiotAssetsAPI
 from typing import Optional, Literal, List
 
 
@@ -232,6 +236,107 @@ class Admin(commands.Cog):
             await interaction.reply(embed=create_embed(title="Cog Reload", description=f'Cog "{cog}" rechargée avec succès.', color=0x00ff00))
         except Exception as e:
             await interaction.reply(embed=create_embed(title="Cog Reload", description=f'Erreur lors du rechargement du Cog "{cog}".\nErreur: {e}', color=0xff0000))
+
+    @commands.is_owner()
+    @commands.command(name='checkemojis', description='Create and check all lol champion emojis', hidden=True)
+    async def check_emojis(self, interaction: commands.Context) -> None:
+        EMOJIS_GUILDS_IDS = [1464341094769885186,1464341347564781824,1464341600682377411,1464341853473345579]
+        riot_assets_api = RiotAssetsAPI(session=self.bot.session)
+        riot_api = RiotAPI(session=self.bot.session)
+        api_version = await riot_api.get_api_version()
+        champion_list = await riot_assets_api.get_champions_list(api_version=api_version)
+        all_present_emojis = []
+        for guild_id in EMOJIS_GUILDS_IDS:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            existing_emojis = {emoji.name: emoji for emoji in guild.emojis}
+            all_present_emojis.extend(existing_emojis.keys())
+        print(len(all_present_emojis), "emojis already present")
+        for _, champ_data in champion_list.items():
+            emoji_name = champ_data['id'].lower().replace("'", "").replace(".", "").replace(" ", "_")
+            if emoji_name in all_present_emojis:
+                continue
+            champion_icon_image = await riot_assets_api.get_champion_icon(championName=champ_data['id'], api_version=api_version)
+            if champion_icon_image is None:
+                continue
+
+            created = False
+            # Try to create the emoji in the first guild that has a free slot and doesn't already have it
+            for guild_id in EMOJIS_GUILDS_IDS:
+                guild = self.bot.get_guild(guild_id)
+                if guild is None:
+                    continue
+
+                # skip if emoji already exists in this guild
+                if any(e.name == emoji_name for e in guild.emojis):
+                    created = True
+                    break
+
+                # respect the guild's emoji limit (fallback to 50)
+                limit = getattr(guild, "emoji_limit", 50)
+                if len(guild.emojis) >= limit:
+                    print(f"Guild {guild.name} has reached emoji limit ({limit}), skipping.")
+                    continue
+
+                try:
+                    # Ensure we pass proper PNG/JPEG bytes to Discord (not raw pixel data)
+                    if isinstance(champion_icon_image, bytes):
+                        image_bytes = champion_icon_image
+                    else:
+                        buf = BytesIO()
+                        try:
+                            # Try saving as PNG
+                            champion_icon_image.save(buf, format='PNG', optimize=True)
+                        except Exception:
+                            champion_icon_image = champion_icon_image.convert("RGBA")
+                            champion_icon_image.save(buf, format='PNG', optimize=True)
+                        image_bytes = buf.getvalue()
+
+                        # Resize if it's too large for Discord (256KB)
+                        MAX_SIZE = 256 * 1024
+                        if len(image_bytes) > MAX_SIZE:
+                            resized = champion_icon_image.resize((128, 128), Image.LANCZOS)
+                            buf = BytesIO()
+                            resized.save(buf, format='PNG', optimize=True)
+                            image_bytes = buf.getvalue()
+
+                    await guild.create_custom_emoji(name=emoji_name, image=image_bytes)
+                    print(f"Emoji {emoji_name} created in guild {guild.name}")
+                    all_present_emojis.append(emoji_name)
+                    created = True
+                    await sleep(10)  # avoid hitting rate limits
+                    break
+                except Exception as e:
+                    # log and try the next guild
+                    LogErrorInWebhook(f"Error creating emoji {emoji_name} in guild {guild.name}: {e}")
+                    return
+
+            if not created:
+                LogErrorInWebhook(f"No available guild slots to create emoji {emoji_name}")
+
+    @commands.is_owner()
+    @commands.command(name='initmastery', description='Initialize mastery data for all users', hidden=True)
+    async def init_mastery(self, interaction: commands.Context) -> None:
+        riot_api = RiotAPI(session=self.bot.session)
+        async with self.bot.pool.acquire() as conn:
+            rows = await conn.fetchall("SELECT puuid, region FROM LoLGamesTracker")
+            for row in rows:
+                puuid = row['puuid']
+                region = row['region']
+                champions_masteries = await riot_api.get_all_champion_masteries(puuid=puuid, region=region)
+                for champ_mastery in champions_masteries.data:
+                    champion_id = champ_mastery['championId']
+                    mastery_level = champ_mastery['championLevel']
+                    mastery_points = champ_mastery['championPoints']
+                    points_since_last_level = champ_mastery['championPointsSinceLastLevel']
+                    points_until_next_level = champ_mastery['championPointsUntilNextLevel']
+                    await conn.execute(
+                        "INSERT OR REPLACE INTO LoLChampionsMastery (champion_id, puuid, mastery_level, mastery_points, points_since_last_level, points_until_next_level) VALUES (?, ?, ?, ?, ?, ?)",
+                        champion_id, puuid, mastery_level, mastery_points, points_since_last_level, points_until_next_level
+                    )
+                print(f"Initialized mastery data for user {puuid}")
+            return await interaction.reply(f"Mastery data initialization complete for {len(rows)} users.")
 
 async def setup(bot: Trapard):
     await bot.add_cog(Admin(bot))
