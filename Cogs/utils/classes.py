@@ -16,7 +16,7 @@ class APIResponse:
 
 class VideoDB:
     """Class to represent a video from the database."""
-    def __init__(self, id: int, pos: int, duree: int, name: str, artiste: str, downloader: int, thumbnail: str, channel_avatar: str, likes: int, views: int, video_id: str, txt_channel_id: int=None):
+    def __init__(self, id: int, pos: int, duree: int, name: str, artiste: str, downloader: int, thumbnail: str, channel_avatar: str, likes: int, views: int, video_id: str, upload_date: str, txt_channel_id: int=None):
         self.id = id
         self.pos = pos
         self.duree = duree
@@ -29,6 +29,7 @@ class VideoDB:
         self.views = views
         self.video_id = video_id
         self.txt_channel_id = txt_channel_id
+        self.upload_date = upload_date
 
     @classmethod
     def from_row(cls, data):
@@ -45,6 +46,7 @@ class VideoDB:
                 data['likes'],
                 data['views'],
                 data['video_id'],
+                data['upload_date'] or "",
                 data['txt_channel_id']
             )
         else:
@@ -63,11 +65,12 @@ class VideoDB:
             'likes': self.likes,
             'views': self.views,
             'video_id': self.video_id,
+            'upload_date': self.upload_date or "",
             'txt_channel_id': self.txt_channel_id
         }
 
     def __str__(self):
-        return f"{self.id} - {self.pos} - {self.duree} - {self.name} - {self.artiste} - {self.downloader} - {self.thumbnail} - {self.channel_avatar} - {self.likes} - {self.views} - {self.video_id} - {self.txt_channel_id}"
+        return f"{self.id} - {self.pos} - {self.duree} - {self.name} - {self.artiste} - {self.downloader} - {self.thumbnail} - {self.channel_avatar} - {self.likes} - {self.views} - {self.video_id} - {self.upload_date} - {self.txt_channel_id}"
 
 class Video:
     """Class to represent a video from youtube and download it's thumbnail and channel avatar."""
@@ -78,11 +81,11 @@ class Video:
     likes: int
     views: int
     channel_avatar: str
+    upload_date: str
     id: str
 
-    def __init__(self, title: str, channel: str, thumb: str, duration: int, likes: int, views: int, channel_avatar: str, id: str, bot):
+    def __init__(self, title: str, channel: str, thumb: str, duration: int, likes: int, views: int, channel_avatar: str, id: str, upload_date: str, bot):
         self.bot = bot
-        
         self._id = id
         self.title = title
         self.channel = channel
@@ -90,6 +93,7 @@ class Video:
         self.duration = duration
         self.likes = likes
         self.views = views
+        self.upload_date = upload_date
         self.channel_avatar = channel_avatar
 
     @property

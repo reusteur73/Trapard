@@ -1,5 +1,5 @@
 import discord, datetime, traceback, asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple
 from .data import commands_id_dict, daily_claim_interest
 from .path import JSON_DATA, G_STATS, R34_FOLDER, VARS
 from PIL import Image
@@ -22,6 +22,40 @@ def getVar(var_name: str):
         if var_name in line:
             return line.split("=")[1].replace('"', "").strip()
     return None
+
+def iso_to_eslapsed_time(iso_time: str) -> Tuple[int, str, int]:
+    """
+    Convert ISO 8601 datetime to adaptive elapsed time.
+
+    Returns:
+        (value, unit, year)
+
+    Examples:
+        "2013-05-09T19:00:00Z" -> (13, "years", 2013)
+        "2026-02-07T11:00:00Z" -> (-3, "minutes", 2026)
+    """
+    dt = datetime.datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    delta_seconds = int((now - dt).total_seconds())
+    sign = -1 if delta_seconds < 0 else 1
+    seconds = abs(delta_seconds)
+
+    units = [
+        ("an", 365 * 24 * 60 * 60),
+        ("mois", 30 * 24 * 60 * 60),
+        ("jour", 24 * 60 * 60),
+        ("heure", 60 * 60),
+        ("minute", 60),
+        ("second", 1),
+    ]
+
+    for unit, unit_seconds in units:
+        if seconds >= unit_seconds:
+            value = seconds // unit_seconds
+            return sign * value, f"{unit}s" if abs(value) > 1 and unit != "mois" else unit, dt.year
+
+    return 0, "second", dt.year
 
 class TrapardeurV2:
     """Gestion de la DB Trapardeur. DB Structure: `userId:str`, `vocalTime:int`, `messageSent:int`, `commandSent:int`"""
@@ -151,12 +185,12 @@ def create_embed(title: str, description: str, color=discord.Color.blue(), autho
         embed.set_thumbnail(url=thumbnail)
 
     if fields:
-        if len(fields) > 1:
-            for i, field in enumerate(fields):
-                embed.add_field(name=fields[i]["name"], value=fields[i]["value"], inline=fields[i]["inline"])
-        else:
-            field = fields[0]
-            embed.add_field(name=fields["name"], value=fields["value"], inline=fields["inline"])
+        for field in fields:
+            embed.add_field(
+                name=field["name"],
+                value=field["value"],
+                inline=field.get("inline", False)
+            )
             
     if suggestions:
         txt = ""

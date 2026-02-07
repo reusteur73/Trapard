@@ -158,7 +158,8 @@ CREATE TABLE musiquesV3 (
     channel_avatar TEXT,
     likes INTEGER,
     views INTEGER,
-    video_id TEXT
+    video_id TEXT,
+    upload_date TEXT
 );
 CREATE TABLE LikedSongsV2 (
     id INTEGER PRIMARY KEY,
@@ -192,5 +193,6 @@ CREATE TABLE autoplay (
     channel_avatar TEXT,
     likes INTEGER,
     views INTEGER,
-    video_id TEXT
+    video_id TEXT,
+    upload_date TEXT
 );

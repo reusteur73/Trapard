@@ -407,7 +407,9 @@ class MusicMessageView(ui.LayoutView):
     async def on_timeout(self):
         try: return await self.ctx.edit_original_response(view=None)
         except: pass
+
 async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False) -> VideoDB | None:
+    """Télécharge les informations d'une vidéo YouTube et les enregistre dans la base de données. Si la vidéo existe déjà, elle est récupérée depuis la base de données."""
     if is_autoplay:
         music_table = "autoplay"
     else:
@@ -415,7 +417,7 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
     async def save_to_db(video: VideoDB, dler:int, pool:Pool, index:int):
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute(f"INSERT INTO {music_table} (pos, duree, name, artiste, downloader, thumbnail, channel_avatar, likes, views, video_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (index, video.duree, video.name, video.artiste, dler, video.thumbnail, video.channel_avatar, video.likes, video.views, video.video_id))
+                await conn.execute(f"INSERT INTO {music_table} (pos, duree, name, artiste, downloader, thumbnail, channel_avatar, likes, views, video_id, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (index, video.duree, video.name, video.artiste, dler, video.thumbnail, video.channel_avatar, video.likes, video.views, video.video_id, video.upload_date))
         return
     
     async def download_image(url: str, _type: Literal["thumb","avatar"], video_id: str) -> str:
@@ -452,13 +454,14 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
         views = int(video["statistics"].get("viewCount", 666))
         duration = int(isodate.parse_duration(video["contentDetails"]["duration"]).total_seconds())
         thumb = await download_image(video["snippet"]["thumbnails"]["high"]["url"], "thumb", _id)
+        upload_date = video["snippet"]["publishedAt"]
         channel_avatar_url = await get_channel_avatar(video["snippet"]["channelId"])
         channel_avatar = await download_image(channel_avatar_url, "avatar", _id)
 
         v = VideoDB(
             id=0, pos=i, duree=duration, name=title, artiste=channel,
             downloader=dler, thumbnail=thumb, channel_avatar=channel_avatar,
-            likes=likes, views=views, video_id=_id
+            likes=likes, views=views, video_id=_id, upload_date=upload_date
         )
 
         await save_to_db(v, dler, pool, index=i)
@@ -491,7 +494,9 @@ async def download(pool: Pool, session: ClientSession, video_id: str, downloader
             data_list[6] = str(data_list[6]).replace("debian", "dreus")
         if 'debian' in str(data_list[7]):
             data_list[7] = str(data_list[7]).replace("debian", "dreus")
-        return VideoDB(id=data_list[0], pos=data_list[1], duree=data_list[2], name=data_list[3], artiste=data_list[4], downloader=data_list[5], thumbnail=data_list[6], channel_avatar=data_list[7], likes=data_list[8], views=data_list[9], video_id=data_list[10])
+        if data_list[11] is None:
+            data_list[11] = ""
+        return VideoDB(id=data_list[0], pos=data_list[1], duree=data_list[2], name=data_list[3], artiste=data_list[4], downloader=data_list[5], thumbnail=data_list[6], channel_avatar=data_list[7], likes=data_list[8], views=data_list[9], video_id=data_list[10], upload_date=data_list[11])
     next_index = await get_next_index(pool)
     video = await get_info(video_id, downloader, next_index)
     if isinstance(video, VideoDB):
@@ -743,6 +748,7 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
         _, likes = video.likes
         _, views = video.views
         _, artiste = video.artiste
+        _, upload_date = video.upload_date
     except TypeError:
         duree = video.duree
         thumbnail = video.thumbnail
@@ -751,6 +757,7 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
         likes = video.likes
         views = video.views
         artiste = video.artiste
+        upload_date = video.upload_date
 
     pbar_percent = current_track_time * 100 / int(duree)
     img = Image.open(f"{PATH}/new_yt.png")
@@ -772,7 +779,11 @@ def draw_music(serverid: int, current_track_time: int, video: VideoDB, next_musi
 
     draw_text(draw, f"{display_big_nums(likes)}", (1125, 907), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
-    draw_text(draw, f"{display_big_nums(views)} vues", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
+    if upload_date is not None and upload_date != "":
+        elapsed_value, elapsed_unit, elapsed_year = iso_to_eslapsed_time(upload_date)
+        draw_text(draw, f"{display_big_nums(views)} vues - Il y a {elapsed_value} {elapsed_unit} ({elapsed_year})", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
+    else:
+        draw_text(draw, f"{display_big_nums(views)} vues", (50, 1000), (0, 40), ImageFont.truetype(FONT, 35), "white")
 
     for i, _video in enumerate(next_musics):
         try:
