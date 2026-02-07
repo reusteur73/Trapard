@@ -2,17 +2,16 @@ from typing import Literal, List, Tuple, cast, Optional
 from discord.ext import commands
 from .utils.classes import VideoDB
 from youtube_search import YoutubeSearch # type: ignore
-from discord import app_commands
+from discord import app_commands, ui, Interaction
 from pytube import YouTube # type: ignore
-from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar, parse_name_tuple, save_song_stats, format_duration, get_latest_message_from_channel
+from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar, parse_name_tuple, save_song_stats, format_duration, get_latest_message_from_channel, iso_to_eslapsed_time
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER, MAIN_DIR
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate , html, datetime, re # type: ignore
+import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate , html, datetime, re, ast # type: ignore
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
-from wavelink import AutoPlayMode
+from wavelink import AutoPlayMode, Player
 from aiohttp import ClientSession
-from wavelink import Player
 from asyncio import sleep
 
 music_table = "musiquesV3"
@@ -55,14 +54,16 @@ class ServerUI:
             else:
                 self.video = self._video
 
+            waiting_layout = MusicWaitingView(bot=self.bot, ctx=discord.Interaction, serverid=self.guild_id)
+
             file = discord.File(f"{MAIN_DIR}/files/waiting.png", filename=f"Waiting.png")
-            self.ui_message = await txt_channel.send(embed=create_embed(title="Musique", description=f"{self.video.name}", color=0x2F3136).set_image(url=f"attachment://Waiting.png"), file=file)
+            self.ui_message = await txt_channel.send(file=file, view=waiting_layout)
+
             iteration = 0
             while self.player.playing and self._running:
                 iteration += 1
                 self.played_time = self.player.position / 1000
                 try:
-                    view = PlayAllViewV2(self.guild_id, ctx=discord.Interaction, bot=self.bot, player=self.player)
                     self.next_musics = [VideoDB.from_row(music.extras) for music in self.player.queue[:8]]
                     if self.player.autoplay == wavelink.AutoPlayMode.enabled and len(self.auto_queue) > 0 and len(self.next_musics) < 5:
                         for i in range(min(3, len(self.auto_queue))):
@@ -92,19 +93,25 @@ class ServerUI:
                         try:
                             last_message = await asyncio.wait_for(get_latest_message_from_channel(txt_channel), timeout=5)
                         except asyncio.TimeoutError:
+                            print("Timeout while fetching latest message from channel, using current UI message as last_message.")
                             last_message = self.ui_message
                         except Exception as e:
+                            print("Error while fetching latest message from channel:", e)
                             traceback.print_exc()
                             last_message = self.ui_message
-                        if self.ui_message.id != last_message.id and last_message.created_at < datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10):
-                            await self.ui_message.delete()
-                            self.ui_message = await asyncio.wait_for(txt_channel.send(embed=embed, view=view, file=file), timeout=5)
+                        view = MusicMessageView(bot=self.bot, ctx=discord.Interaction, serverid=self.guild_id, player=self.player, music_title=title)
+                        if self.ui_message.id != last_message.id and last_message.created_at < datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=5):
+                            await asyncio.shield(asyncio.wait_for(self.ui_message.delete(), timeout=8))
+                            self.ui_message = await asyncio.shield(asyncio.wait_for(txt_channel.send(view=view, file=file), timeout=8))
                             last_message = self.ui_message
-                        else:
+                        elif self.ui_message.id == last_message.id:
                             try:
-                                self.ui_message = await asyncio.wait_for(self.ui_message.edit(embed=embed, view=view, attachments=[file]), timeout=5)
+                                self.ui_message = await asyncio.wait_for(self.ui_message.edit(view=view, content=None, embed=None, attachments=[file]), timeout=5)
                             except asyncio.TimeoutError:
-                                pass
+                                print("Timeout while editing music player message.(2)")
+                            except Exception as e:
+                                print("Error while editing music player message:", e)
+                                traceback.print_exc()
                     except discord.errors.HTTPException:
                         # LogErrorInWebhook(f"Music {self.video.name} ({self.video.pos}) cannot be edited, message not found.")
                         pass
@@ -123,11 +130,11 @@ class ServerUI:
                             return
                     if self.ui_message is not None:
                         if self.ui_message.edited_at is not None:
-                            sleep_time = (self.ui_message.edited_at + datetime.timedelta(seconds=8.8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+                            sleep_time = (self.ui_message.edited_at + datetime.timedelta(seconds=8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
                         elif self.ui_message.edited_at is None and self.ui_message.created_at is not None:
-                            sleep_time = (self.ui_message.created_at + datetime.timedelta(seconds=8.8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+                            sleep_time = (self.ui_message.created_at + datetime.timedelta(seconds=8) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
                     else:
-                        sleep_time = datetime.timedelta(seconds=8.8).total_seconds()
+                        sleep_time = datetime.timedelta(seconds=8).total_seconds()    
 
                     await asyncio.sleep(max(0, sleep_time))
                 except Exception as e:
@@ -147,7 +154,6 @@ class ServerUI:
             self.bot.server_music_session[self.guild_id]['time'] +=  int(self.played_time)
         if self.ui_message:
             await asyncio.to_thread(draw_music, self.guild_id, 0, self.video, self.next_musics, True)
-            file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_end_music_player.png", filename=f"Music.png")
             try:
                 raw_txt = f"{self.video.name} ({self.video.pos})"
                 pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
@@ -155,11 +161,12 @@ class ServerUI:
                 if match:
                     name = match.group(1)
                     pos = match.group(2)
-                embed = discord.Embed(title=f"Musique {html.unescape(name)} ({pos})", description=f" ", color=0x2F3136)
+                title = f"Musique {html.unescape(name)} ({pos})"
             except:
-                embed = discord.Embed(title=f"Musique {html.unescape(self.video.name)} (autoplay)", description=f" ", color=0x2F3136)
-            embed.set_image(url=f"attachment://Music.png")
-            await self.ui_message.edit(embed=embed, attachments=[file], view=None)
+                title = f"Musique {html.unescape(self.video.name)} (autoplay)"
+            file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_end_music_player.png", filename=f"End.png")
+            view = MusicEndView(bot=self.bot, ctx=discord.Interaction, serverid=self.guild_id, music_title=title)
+            await self.ui_message.edit(attachments=[file], view=view)
         self._running = False
 
     @property
@@ -170,6 +177,236 @@ class ServerUI:
     def task(self, __value):
         self._task = __value
 
+class MusicWaitingView(ui.LayoutView):
+    def __init__(self, *, bot, ctx, serverid: int, timeout: Optional[float] = 180) -> None:
+        super().__init__(timeout=timeout)
+        try:
+            self.bot = bot
+            self.ctx = ctx
+            self.thumb_file = discord.File(f"{MAIN_DIR}/files/waiting.png", filename=f"Waiting.png")
+            self.text = ui.TextDisplay('## Chargement de la musique en cours...')
+            gallery = ui.MediaGallery(
+                discord.MediaGalleryItem(media=self.thumb_file, description="Chargement de la musique en cours...")
+            )
+            container = ui.Container(self.text, gallery)
+            self.add_item(container)
+        except Exception as e:
+            traceback.print_exc()
+            LogErrorInWebhook(f"Error in MusicWaitingView initialization: {e}")
+
+class MusicEndView(ui.LayoutView):
+    def __init__(self, *, bot, ctx, serverid: int, music_title: str, timeout: Optional[float] = 180) -> None:
+        super().__init__(timeout=timeout)
+        try:
+            self.bot = bot
+            self.ctx = ctx
+            self.thumb_file = discord.File(f"{MAIN_DIR}/files/{serverid}_end_music_player.png", filename=f"End.png")
+            self.text = ui.TextDisplay(f'## {music_title}')
+            gallery = ui.MediaGallery(
+                discord.MediaGalleryItem(media=self.thumb_file, description=f"{music_title}")
+            )
+            container = ui.Container(self.text, gallery)
+            self.add_item(container)
+        except Exception as e:
+            traceback.print_exc()
+            LogErrorInWebhook(f"Error in MusicEndView initialization: {e}")
+
+class MusicMessageView(ui.LayoutView):
+    """View principale affichée pendant la lecture d'une musique, avec les boutons d'interaction et l'image youtube de la musique."""
+    def __init__(self, *, bot, ctx, serverid: int, player: wavelink.Player=None, timeout: Optional[float] = 180, music_title: str="") -> None:
+        super().__init__(timeout=timeout)
+        try:
+            self.bot = bot
+            self.ctx = ctx
+            if player is None:
+                player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+            self.player = player
+            self.thumb_file = discord.File(f"{MAIN_DIR}/files/{serverid}_music_player.png", filename=f"Music.png")
+            self.text = ui.TextDisplay(f'## {music_title if music_title else "Musique en cours..."}')
+            gallery = ui.MediaGallery(
+                discord.MediaGalleryItem(media=self.thumb_file, description=f"{music_title if music_title else 'Musique en cours...'}")
+            )
+            
+            separator = ui.Separator(
+                spacing = discord.SeparatorSpacing.large, # can be small or large
+                visible = True, # whether to visually display a line
+            )
+
+            row1 = ui.ActionRow()
+
+            # Previous Button
+            if serverid in self.bot.last_music:
+                prev_song_btn = ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True) # temp disabled
+            else:
+                prev_song_btn = ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True)
+            row1.add_item(prev_song_btn)
+            prev_song_btn.callback = lambda interaction=self.ctx, button=prev_song_btn: self.button_callback(interaction, button)
+            
+            # AutoPlay Button
+            if self.player is not None and self.player.autoplay.name == "enabled":
+                autoplay_button = ui.Button(label="AutoPlay On", style=discord.ButtonStyle.green, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
+            else:
+                autoplay_button = ui.Button(label="AutoPlay Off", style=discord.ButtonStyle.red, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
+            row1.add_item(autoplay_button)
+            autoplay_button.callback = lambda interaction=self.ctx, button=autoplay_button: self.button_callback(interaction, button)
+
+            # Skip Button
+            if (len(player.queue) > 0) or (player.autoplay.name == "enabled"):
+                next_button = ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0)
+            else:
+                next_button = ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0, disabled=True)
+            row1.add_item(next_button)
+            next_button.callback = lambda interaction=self.ctx, button=next_button: self.button_callback(interaction, button)
+
+            row2 = ui.ActionRow()
+            if self.player.position and self.player.position >= 20000:
+                back_time = ui.Button(label="<< 20s", style=discord.ButtonStyle.secondary, emoji="⏪", custom_id="back_time", row=1)
+            else:
+                back_time = ui.Button(label="<< 20s", style=discord.ButtonStyle.secondary, emoji="⏪", custom_id="back_time", row=1, disabled=True)
+            row2.add_item(back_time)
+            back_time.callback = lambda interaction=self.ctx, button=back_time: self.button_callback(interaction, button)
+
+            if self.player.playing:
+                pause_button = ui.Button(label="Pause", style=discord.ButtonStyle.secondary, emoji="⏯", custom_id="pause_resume", row=1)
+            else:
+                pause_button = ui.Button(label="Resume", style=discord.ButtonStyle.secondary, emoji="⏯", custom_id="pause_resume", row=1)
+            row2.add_item(pause_button)
+            pause_button.callback = lambda interaction=self.ctx, button=pause_button: self.button_callback(interaction, button)
+
+            if self.player.current is not None and self.player.current.length and self.player.current.length - self.player.position >= 20000:
+                forward_time = ui.Button(label="20s >>", style=discord.ButtonStyle.secondary, emoji="⏩", custom_id="forward_time", row=1)
+            else:
+                forward_time = ui.Button(label="20s >>", style=discord.ButtonStyle.secondary, emoji="⏩", custom_id="forward_time", row=1, disabled=True)
+            row2.add_item(forward_time)
+            forward_time.callback = lambda interaction=self.ctx, button=forward_time: self.button_callback(interaction, button)
+
+            row3 = ui.ActionRow()
+            like_btn = ui.Button(label="Like", style=discord.ButtonStyle.primary, emoji="👍", custom_id="like", row=1)
+            row3.add_item(like_btn)
+            like_btn.callback = lambda interaction=self.ctx, button=like_btn: self.button_callback(interaction, button)
+
+            disco_btn = ui.Button(label="Disconnect", style=discord.ButtonStyle.danger, emoji="🔌", custom_id="disconnect", row=1)
+            row3.add_item(disco_btn)
+            disco_btn.callback = lambda interaction=self.ctx, button=disco_btn: self.button_callback(interaction, button)
+
+            container = ui.Container(self.text, separator, gallery, separator, row1, row2, row3)
+            self.add_item(container)
+        except Exception as e:
+            traceback.print_exc()
+            LogErrorInWebhook(f"Error in MusicMessageView initialization: {e}")
+
+    async def button_callback(self, interaction: Interaction, button: discord.ui.Button):
+        try: await interaction.response.defer()
+        except: pass
+        if button.custom_id == "pause_resume":
+            if self.player.paused:
+                await self.player.pause(False)
+                button.label = "Pause"
+                button.style = discord.ButtonStyle.secondary
+            else:
+                await self.player.pause(True)
+                button.label = "Resume"
+                button.style = discord.ButtonStyle.success
+            try:
+                await interaction.edit_original_response(view=self)
+            except discord.errors.NotFound:
+                return await interaction.followup.send(view=self)
+        elif button.custom_id == "back_time":
+            new_position = max(0, self.player.position - 20000)
+            await self.player.seek(new_position)
+        elif button.custom_id == "forward_time":
+            if self.player.current.length:
+                new_position = min(self.player.current.length, self.player.position + 20000)
+                await self.player.seek(new_position)
+        elif button.custom_id == "mlist":
+            await command_counter(user_id=str(interaction.user.id), bot=self.bot)
+            options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
+            for unique in self.bot.unique_downloader:
+                user = await self.bot.fetch_user(int(unique))
+                if user:
+                    name = user.display_name
+                    options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
+            else:
+                drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot)
+                mlist = await getMList(bot=self.bot)
+                view = QueueBtnV2(mlist, len(mlist), interaction)
+                view.add_item(drop)
+                await interaction.followup.send(embed=mlist[0], view=view)
+        elif button.custom_id == "skip":
+            track = self.player.current
+            self.player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
+            await self.player.skip(force=True)
+            if track is not None:
+                if self.player.guild.id in self.bot.server_music_session:
+                    self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
+                data = dict(track.extras)
+                try:
+                    embed = create_embed(title="Musique", description=f"La musique `{data['name']}` (**{data['pos']}**) a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
+                except KeyError: # this is from autoplay
+                    embed = create_embed(title="Musique", description=f"La musique `{track.title}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
+                await interaction.followup.send(embed=embed)
+                try:
+                    await storeSkippedSong(pool=self.bot.pool, songname=data['name'], userid=str(interaction.user.id))
+                    return
+                except KeyError:
+                    await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
+                    return 
+        elif button.custom_id == "disconnect":
+            await self.player.disconnect()
+            self.player.queue.clear()
+            try:
+                if interaction.guild.id in self.bot.ui_V2:
+                    await self.bot.ui_V2[interaction.guild.id].stop()
+                    self.bot.ui_V2[interaction.guild.id].task.cancel()
+                    self.bot.ui_V2.pop(interaction.guild.id, None)
+            except Exception as e:
+                print("X02:", e)
+                pass
+            if interaction.guild.id in self.bot.server_music_session:
+                played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[interaction.guild.id]['time']))
+                embed = create_embed(title="Musique", description=f"Bot déconnecté du vocal par <@{interaction.user.id}>\nJ'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
+            else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.")
+            await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
+            if self.player.guild.id in self.bot.server_music_session:
+                self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
+        elif button.custom_id == "like":
+            songData = VideoDB.from_row(self.player.current.extras)
+            async with self.bot.pool.acquire() as conn:
+                async with conn.transaction():
+                    result = await conn.fetchall("SELECT songId FROM LikedSongsV2 WHERE userId = ?", (str(interaction.user.id),))
+                    if result:
+                        # check if the song is already liked
+                        for song in result:
+                            print(song[0], songData.video_id)
+                            if str(song[0]).strip() == str(songData.video_id).strip():
+                                embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.")
+                                return await interaction.followup.send(embed=embed)
+                    await conn.execute("INSERT INTO LikedSongsV2 (userId, songId, songName) VALUES (?, ?, ?)", (int(interaction.user.id), str(songData.video_id), str(songData.name)))
+                    embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{songData.name}` a été ajoutée à tes musiques likées.")
+                return await interaction.followup.send(embed=embed)
+        elif button.custom_id == "prev":
+            pass
+        elif button.custom_id == "autoplay":
+            if self.player.autoplay.name == "enabled":
+                self.player.autoplay = AutoPlayMode.disabled
+                self.sb_btn.label = "AutoPlay Off"
+                texte = f"AutoPlay est maintenant désactivé uniquement les musiques de la queue seront jouées !"
+                self.sb_btn.style = discord.ButtonStyle.red
+            else:
+                self.player.autoplay = AutoPlayMode.enabled
+                self.sb_btn.label = "AutoPlay On"
+                texte = f"AutoPlay est maintenant activé selon les recommandations Youtube !"
+                self.sb_btn.style = discord.ButtonStyle.green
+            try:
+                await interaction.channel.send(embed=create_embed(title="Musique", description=texte))
+                await interaction.edit_original_response(view=self)
+            except discord.errors.NotFound:
+                return await interaction.followup.send(view=self)
+        return
+    
+    async def on_timeout(self):
+        try: return await self.ctx.edit_original_response(view=None)
+        except: pass
 async def download(pool: Pool, session: ClientSession, video_id: str, downloader: int, is_autoplay: bool = False) -> VideoDB | None:
     if is_autoplay:
         music_table = "autoplay"
@@ -1033,157 +1270,6 @@ class QueueBtnV2(discord.ui.View): # Queue List Buttons
         async def go_to_last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
             await self.show_current_page(interaction, len(self.messages) - 1 - self.current_page)
 
-    except Exception as e:
-        LogErrorInWebhook()
-
-class PlayAllViewV2(discord.ui.View): #Les trois buttons du play-all 
-    try:
-        def __init__(self, serverid, ctx: commands.Context, bot, player: wavelink.Player=None): 
-            super().__init__(timeout=300)
-            self.bot = bot
-            self.serverid = serverid
-            self.ctx = ctx
-            self.unique_downloader = bot.unique_downloader
-            if player is None:
-                player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
-            self.player = player
-
-            # Previous song BTN
-            if self.serverid in self.bot.last_music:
-                self.prev_song_btn = discord.ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True) # temp disabled
-            else:
-                self.prev_song_btn = discord.ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True)
-            self.add_item(self.prev_song_btn)
-            self.prev_song_btn.callback = lambda interaction=self.ctx, button=self.prev_song_btn: self.on_button_click(interaction, button)
-
-            if player.autoplay.name == "enabled":
-                self.sb_btn = discord.ui.Button(label="AutoPlay On", style=discord.ButtonStyle.green, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
-            else:
-                self.sb_btn = discord.ui.Button(label="AutoPlay Off", style=discord.ButtonStyle.red, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
-            self.add_item(self.sb_btn)
-            self.sb_btn.callback = lambda interaction=self.ctx, button=self.sb_btn: self.on_button_click(interaction, button)
-
-            # Skip BTN
-            if (len(player.queue) > 0) or (self.player.autoplay.name == "enabled"):
-                self.skip_btn = discord.ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0)
-            else:
-                self.skip_btn = discord.ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0, disabled=True)
-            self.add_item(self.skip_btn)
-            self.skip_btn.callback = lambda interaction=self.ctx, button=self.skip_btn: self.on_button_click(interaction, button)
-
-            self.afficher_queue_btn = discord.ui.Button(label="Afficher la queue", style=discord.ButtonStyle.primary, emoji="🎵", custom_id="afficher_queue", row=1)
-            self.add_item(self.afficher_queue_btn)
-            self.afficher_queue_btn.callback = lambda interaction=self.ctx, button=self.afficher_queue_btn: self.on_button_click(interaction, button)
-
-            self.mlist_btn = discord.ui.Button(label="mlist", style=discord.ButtonStyle.primary, emoji="📊", custom_id="mlist", row=1)
-            self.add_item(self.mlist_btn)
-            self.mlist_btn.callback = lambda interaction=self.ctx, button=self.mlist_btn: self.on_button_click(interaction, button)
-
-            self.like_btn = discord.ui.Button(label="Like", style=discord.ButtonStyle.primary, emoji="👍", custom_id="like", row=1)
-            self.add_item(self.like_btn)
-            self.like_btn.callback = lambda interaction=self.ctx, button=self.like_btn: self.on_button_click(interaction, button)
-
-            self.disco_btn = discord.ui.Button(label="Disconnect", style=discord.ButtonStyle.danger, emoji="🔌", custom_id="disconnect", row=1)
-            self.add_item(self.disco_btn)
-            self.disco_btn.callback = lambda interaction=self.ctx, button=self.disco_btn: self.on_button_click(interaction, button)
-
-        async def on_button_click(self, interaction: discord.Interaction, button: discord.ui.Button):
-            try: await interaction.response.defer()
-            except: pass
-            if button.custom_id == "afficher_queue":
-                messages = await getMusicQueue(self.serverid, bot=self.bot, music_list_handler=MusicList_Handler(bot=self.bot))
-                queue_view = QueueBtnV2(messages, len(messages), ctx=self.ctx)
-                await interaction.channel.send(embed=messages[0], view=queue_view)
-                view = PlayAllViewV2(interaction.guild_id, interaction, self.bot)
-                await interaction.channel.send(view=view)
-            elif button.custom_id == "mlist":
-                await command_counter(user_id=str(interaction.user.id), bot=self.bot)
-                options = [discord.SelectOption(label="Téléchargé par : Tous", value=f"tous", default=True, emoji="🦈")]
-                for unique in self.bot.unique_downloader:
-                    user = await self.bot.fetch_user(int(unique))
-                    if user:
-                        name = user.display_name
-                        options.append(discord.SelectOption(label=name, value=f"{unique}", default=False))
-                else:
-                    drop = DropDownMlist(ctx=interaction, options=options, bot=self.bot)
-                    mlist = await getMList(bot=self.bot)
-                    view = QueueBtnV2(mlist, len(mlist), interaction)
-                    view.add_item(drop)
-                    await interaction.followup.send(embed=mlist[0], view=view)
-            elif button.custom_id == "skip":
-                track = self.player.current
-                self.player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
-                await self.player.skip(force=True)
-                if track is not None:
-                    if self.player.guild.id in self.bot.server_music_session:
-                        self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
-                    data = dict(track.extras)
-                    try:
-                        embed = create_embed(title="Musique", description=f"La musique `{data['name']}` (**{data['pos']}**) a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
-                    except KeyError: # this is from autoplay
-                        embed = create_embed(title="Musique", description=f"La musique `{track.title}` a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
-                    await interaction.followup.send(embed=embed)
-                    try:
-                        await storeSkippedSong(pool=self.bot.pool, songname=data['name'], userid=str(interaction.user.id))
-                        return
-                    except KeyError:
-                        await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
-                        return 
-            elif button.custom_id == "disconnect":
-                await self.player.disconnect()
-                self.player.queue.clear()
-                try:
-                    if interaction.guild.id in self.bot.ui_V2:
-                        await self.bot.ui_V2[interaction.guild.id].stop()
-                        self.bot.ui_V2[interaction.guild.id].task.cancel()
-                        self.bot.ui_V2.pop(interaction.guild.id, None)
-                except Exception as e:
-                    print("X02:", e)
-                    pass
-                if interaction.guild.id in self.bot.server_music_session:
-                    played_time = convert_to_minutes_seconds(str(self.bot.server_music_session[interaction.guild.id]['time']))
-                    embed = create_embed(title="Musique", description=f"Bot déconnecté du vocal par <@{interaction.user.id}>\nJ'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
-                else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.")
-                await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
-                if self.player.guild.id in self.bot.server_music_session:
-                    self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
-            elif button.custom_id == "like":
-                songData = VideoDB.from_row(self.player.current.extras)
-                async with self.bot.pool.acquire() as conn:
-                    async with conn.transaction():
-                        result = await conn.fetchall("SELECT * FROM LikedSongsV2 WHERE userId = ?", (str(interaction.user.id),))
-                        if result:
-                            # check if the song is already liked
-                            for song in result:
-                                if song[2] == songData.video_id:
-                                    embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, tu as déjà liké cette musique.")
-                                    return await interaction.followup.send(embed=embed)
-                        await conn.execute("INSERT INTO LikedSongsV2 (userId, songId, songName) VALUES (?, ?, ?)", (int(interaction.user.id), str(songData.video_id), str(songData.name)))
-                        embed = create_embed(title="Musique", description=f"<@{interaction.user.id}>, la musique `{songData.name}` a été ajoutée à tes musiques likées.")
-                    return await interaction.followup.send(embed=embed)
-            elif button.custom_id == "prev":
-                pass
-            elif button.custom_id == "autoplay":
-                if self.player.autoplay.name == "enabled":
-                    self.player.autoplay = AutoPlayMode.disabled
-                    self.sb_btn.label = "AutoPlay Off"
-                    texte = f"AutoPlay est maintenant désactivé uniquement les musiques de la queue seront jouées !"
-                    self.sb_btn.style = discord.ButtonStyle.red
-                else:
-                    self.player.autoplay = AutoPlayMode.enabled
-                    self.sb_btn.label = "AutoPlay On"
-                    texte = f"AutoPlay est maintenant activé selon les recommandations Youtube !"
-                    self.sb_btn.style = discord.ButtonStyle.green
-                try:
-                    await interaction.channel.send(embed=create_embed(title="Musique", description=texte))
-                    await interaction.edit_original_response(view=self)
-                except discord.errors.NotFound:
-                    return await interaction.followup.send(view=self)
-            return
-        async def on_timeout(self):
-            try: return await self.ctx.edit_original_response(view=None)
-            except: pass
-        
     except Exception as e:
         LogErrorInWebhook()
 
