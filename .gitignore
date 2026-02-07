@@ -3,6 +3,7 @@ files/
 *.pyc
 __pycache__/
 Cogs/utils/asqlite/
+venv/
 lava/
 Python-3.*
 requirements.txt

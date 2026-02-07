@@ -1839,6 +1839,7 @@ class Music(commands.Cog):
 
             except Exception as e:
                 print("x0585", e)
+                traceback.print_exc()
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
@@ -1848,10 +1849,13 @@ class Music(commands.Cog):
         guild_id = player.guild.id
 
         if hasattr(player, "_skip_by_command") and player._skip_by_command:
+            print("[I] Skipped by command, not processing end event.")
             player._skip_by_command = False
             if guild_id in self.bot.ui_V2:
                 await self.bot.ui_V2[guild_id].stop()
-            print("[I] Skipped by command, not processing end event.")
+            if len(player.queue) > 0 and len(player.channel.members) > 1:
+                next_track: wavelink.Playable = player.queue.get()
+                await player.play(next_track)
             return
 
         track: wavelink.Playable = payload.track
@@ -1876,10 +1880,10 @@ class Music(commands.Cog):
                 print(f"STOPPED UI for guild {guild_id} and track {data['name'] if data else 'unknown'}")
         except Exception as e:
             print("X0254:", e)
-        # if len(player.queue) > 0:
-        #     if len(player.channel.voice_states) > 1:
-        #         # next_track: wavelink.Playable = player.queue.get()
-        #         # return await player.play(next_track)
+            traceback.print_exc()
+        if len(player.queue) > 0 and len(player.channel.members) > 1:
+            next_track: wavelink.Playable = player.queue.get()
+            return await player.play(next_track)
         return
 
     @commands.Cog.listener()
@@ -1976,7 +1980,7 @@ class Music(commands.Cog):
             embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
             return await ctx.send(embed=embed)
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT * FROM LikedSongsV2 WHERE userId = ?", (str(user.id),))
+            data = await conn.fetchall("SELECT songId FROM LikedSongsV2 WHERE userId = ?", (str(user.id),))
         if len(data) == 0:
             embed = create_embed(title="Erreur", description=f"<@{user.id}> n'a pas de musiques likés.")
             return await ctx.send(embed=embed, ephemeral=True)
@@ -1986,9 +1990,9 @@ class Music(commands.Cog):
             music_list = []
             random.shuffle(data)
             for _i, track in enumerate(data):
-                _id, userId, videoId, videoName = track
-                video = await get_Video_from_input(videoId, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
-                _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={videoId}")
+                songId = ast.literal_eval(track[0])[1]
+                video = await get_Video_from_input(songId, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
+                _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={songId}")
                 if len(_track) > 0:
                     _r = video.to_dict()
                     _r['txt_channel_id'] = ctx.channel.id
@@ -2550,14 +2554,14 @@ class Music(commands.Cog):
             else:
                 userID = str(user.id)
             async with self.bot.pool.acquire() as conn:
-                data = await conn.fetchall(f"SELECT songName FROM LikedSongs WHERE userId = ?", (userID,))            
+                data = await conn.fetchall(f"SELECT songName FROM LikedSongsV2 WHERE userId = ?", (userID,))            
             if data == []:
                 embed = create_embed(title="Liked-songs", description=f"<@{userID}> n'a pas de musiques likés !")
                 return await ctx.send(embed=embed)
             else:
                 batch_size = 15
                 fields = []
-                songs = [f'`{i[0]}`' for i in data]
+                songs = [f'`{ast.literal_eval(i[0])[1]}`' for i in data]
                 batchs = [songs[i:i + batch_size] for i in range(0, len(songs), batch_size)]
                 for i, batch in enumerate(batchs):
                     fields.append({"name": f"{i+1}.", "value": " - ".join(batch), "inline": False})
@@ -2567,28 +2571,22 @@ class Music(commands.Cog):
             LogErrorInWebhook()
 
     @commands.hybrid_command(name="remove-liked-song", aliases=["rm-liked", "dislike"])
-    @app_commands.describe(index= "Le numéro (index) de la musique à enlever de tes musiques likées.")
     @app_commands.describe(musique_name="Le nom de la musique à enlever de tes musiques likées.")
-    async def remove_liked_song(self, ctx: commands.Context, index: int=None, musique_name:str=None):
+    async def remove_liked_song(self, ctx: commands.Context, musique_name:str=None):
         """Supprimer une musique de tes titres likées."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            if index is not None:
-                max_index = await self.music_list_handler.get_next_index()
-                if index >= max_index :
-                    return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"Le N°`{index}` n'existe pas dans la MList."))
-                song_name = await self.music_list_handler.getName(str(index))
-            elif musique_name is not None:
+            if musique_name is not None:
                 song_name = musique_name
             async with self.bot.pool.acquire() as conn:
                 async with conn.transaction():
-                    result = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(ctx.author.id),))
-                    if result:
-                        if song_name in [i[2] for i in result]:
-                            await conn.execute("DELETE FROM LikedSongs WHERE songName = ? AND userId = ?", (song_name, str(ctx.author.id),))
-                            return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` a bien été enlevée de tes musiques likées."))
-                        else:
-                            return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` n'est pas dans tes musiques likées."))
+                    result = await conn.fetchall("SELECT * FROM LikedSongsV2 WHERE userId = ? AND songName = ?", (str(ctx.author.id), song_name,))
+                    if result is not None:
+                        print(result)
+                        await conn.execute("DELETE FROM LikedSongsV2 WHERE songName = ? AND userId = ?", (song_name, str(ctx.author.id),))
+                        return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` a bien été enlevée de tes musiques likées."))
+                    else:
+                        return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` n'est pas dans tes musiques likées."))
             return await ctx.send(embed=create_embed(title="Remove-liked-song", description=f"La musique `{song_name}` n'est pas dans tes musiques likées."))
         except Exception as e:
             LogErrorInWebhook()
@@ -2598,11 +2596,12 @@ class Music(commands.Cog):
             liste = []
             async with self.bot.pool.acquire() as conn:
                 async with conn.transaction():
-                    result = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(ctx.user.id),))
+                    result = await conn.fetchall("SELECT songId, songName FROM LikedSongsV2 WHERE userId = ?", (str(ctx.user.id),))
                     if result:
                         for i in result:
-                            if musique_name.lower() in i[2].lower():
-                                liste.append(app_commands.Choice(name=f"{i[2]}", value=str(i[2])))
+                            songName = ast.literal_eval(i[1])[1]
+                            if musique_name.lower() in songName.lower():
+                                liste.append(app_commands.Choice(name=f"{songName}", value=i[1]))
                             if len(liste) == 25:
                                 break
                     else:
@@ -2788,6 +2787,15 @@ class Music(commands.Cog):
             player.autoplay = AutoPlayMode.disabled
         await ctx.message.add_reaction("\u2705")
 
+    @commands.command()
+    async def test(self, ctx: commands.Context):
+        """Test command."""
+        print("TEST")
+        view = MusicMessageView(bot=self.bot, ctx=ctx, serverid=ctx.guild.id)
+        files = [getattr(view, "thumb_file", None)]
+        files = [f for f in files if f is not None]
+        await ctx.send(view=view, files=files)
+
 async def handle_sb(ctx: commands.Context, bot, userId: int=None):
     """Affiche les sons de la soundboard."""
     try:
@@ -2861,12 +2869,8 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
             if random_nb > 50:
                 return await ctx.reply(embed=create_embed(title="Erreur", description="Le nombre de musiques aléatoires ne peut pas être supérieur à 50."))
             async with ctx.bot.pool.acquire() as conn:
-                data = await conn.fetchall(f"SELECT * FROM {music_table}")
-            tracks = []
-            random.shuffle(data)
+                data = await conn.fetchall(f"SELECT * FROM {music_table} ORDER BY RANDOM() LIMIT ?", (random_nb,))
             for i, track in enumerate(data):
-                if i == random_nb:
-                    break
                 video = VideoDB.from_row(track)
                 try:
                     _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
@@ -2876,10 +2880,11 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
                         _track[0].extras = _r
                         await vc.queue.put_wait([_track[0]])
                         print(f"Added to queue {video.name}")
-                except:
+                    if i == 0 and not vc.playing:
+                        await vc.play(vc.queue.get(), volume=100)
+                except Exception as e:
                     LogErrorInWebhook(f"Can't search {video.video_id} ({video.name}) in random")
-            if not vc.playing:
-                await vc.play(vc.queue.get(), volume=100)
+                    traceback.print_exc()
         if ctx.author.voice is None:
             return await ctx.send(embed=create_embed(title="Erreur", description="Tu n'es pas dans un channel vocal."), ephemeral=True)
         match _type:

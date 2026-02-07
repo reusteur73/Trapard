@@ -10,7 +10,7 @@ import asqlite, logging
 from typing import Dict, TYPE_CHECKING
 from Cogs.utils.classes import Trapardeur, IaView, CallFriends, TrapcoinsHandler
 from Cogs.utils.data import FULL_EMOJIS_LIST
-from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar, calc_usr_gain_by_tier, fetch_diplay_name
+from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar, calc_usr_gain_by_tier
 from Cogs.utils.path import DB_PATH, DB_PATH_2
 from asyncio import sleep
 import asyncio, openai, wavelink, time # type: ignore
