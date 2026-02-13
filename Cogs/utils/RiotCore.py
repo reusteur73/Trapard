@@ -2,7 +2,7 @@ import io
 from aiohttp import ClientSession
 from .functions import getVar, LogErrorInWebhook, afficher_nombre_fr
 from .classes import APIResponse
-from .path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA
+from .path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA, LOL_DRAFT_PLAYER_IMG
 from typing import Literal, Tuple, List
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -110,6 +110,17 @@ class RiotAssetsAPI:
                     return queue["description"]
             LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
             return "Mode de jeu inconnu"
+
+    async def get_mastery_icon(self, mastery_level: int) -> Image.Image | None:
+        """Fetches the champion mastery icon image for a given mastery level."""
+        if mastery_level > 10:
+            mastery_level = 10
+        url = f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{mastery_level}.cm_updates.png"
+        async with self.session.get(url) as response:
+            response.raise_for_status()
+            data = await response.read()
+            return Image.open(BytesIO(data)).convert("RGBA")
+        return None
 
 class RiotAPI:
     """Riot Games API wrapper."""
@@ -267,13 +278,18 @@ class LolGameDrawer:
     def __init__(self):
         self.fontSmall = ImageFont.truetype(LOL_FONT, 15)
         self.fontSmall2 = ImageFont.truetype(LOL_FONT, 12)
-        self.fontSmall3 = ImageFont.truetype(LOL_FONT, 10)
-        self.smalll = ImageFont.truetype(LOL_FONT, 8)
-        self.smalll2 = ImageFont.truetype(LOL_FONT, 7)
-        self.font = ImageFont.truetype(LOL_FONT, 18)
+        self.fontSmall3 = ImageFont.truetype(LOL_FONT, 42)
+        self.smalll = ImageFont.truetype(LOL_FONT, 55)
+        self.smalll2 = ImageFont.truetype(LOL_FONT, 64)
+        self.font_medium = ImageFont.truetype(LOL_FONT, 30)
+        self.font_medium2 = ImageFont.truetype(LOL_FONT, 23)
+        self.font_medium3 = ImageFont.truetype(LOL_FONT, 22)
+        self.font = ImageFont.truetype(LOL_FONT, 70)
 
     def _draw_text_center(self, draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str,) -> None:
         """Draws centered text within a specified box size."""
+        if not isinstance(text, str):
+            text = str(text)
         text_width, text_height = draw.textlength(text, font=font), 24
         coordinates = (
             int(coordinates[0] + (box_size[0] - text_width) // 2),
@@ -283,7 +299,9 @@ class LolGameDrawer:
 
     def _draw_text_left(self, draw: ImageDraw.ImageDraw, text: str, coordinates: Tuple[int, int], box_size: Tuple[int, int], font: ImageFont.FreeTypeFont, fill: str) -> None:
         """Draws left-aligned text within a specified box size."""
-        text_width, text_height = draw.textlength(text, font=font), 24
+        if not isinstance(text, str):
+            text = str(text)
+        _, text_height = draw.textlength(text, font=font), 24
         x = coordinates[0] # Fixer la coordonnée x à celle de départ de la boîte pour aligner le texte à gauche
         # Calculer la coordonnée y pour centrer verticalement le texte
         y = int(coordinates[1] + (box_size[1] - text_height) // 2)
@@ -316,97 +334,58 @@ class LolGameDrawer:
         im.putalpha(alpha)
         return im
 
-    def draw_game(self, pseudo: str, rank: str, gameMode: str, championIcon: io.BytesIO, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, items: list, players: list, results: list, bans: list, mentions: str):
+    def draw_game(self, gameMode: str, players: list, results: list, bans: list, mentions: str):
         """Draws the League of Legends game image."""
         img = Image.open(LOL_IMAGE)
 
-        # Process main player
-        if championIcon:
-            avatar = self._add_corners(championIcon, 10).resize((100, 100))
-            img.paste(avatar, (62, 129+72), avatar) # Champion Icon
-        if sums1:
-            summoner1 = self._add_corners(sums1, 10).resize((31, 31))
-            img.paste(summoner1, (99, 235+72), summoner1) # Summoner 1
-        if sums2:
-            summoner2 = self._add_corners(sums2, 10).resize((31, 31))
-            img.paste(summoner2, (132, 235+72), summoner2) # Summoner 2
-        if rune:
-            rune = self._remove_white_background(rune).resize((35, 35))
-            img.paste(rune, (62, 234+70), rune) # Rune
-        items_pos_mapping = { 0: (241, 256), 1: (281, 256), 2: (321, 256), 3: (241, 300), 4: (281, 300), 5: (321, 300), 6: (361, 300) }
-        for i in range(7): # Main Player Items
-            if items[i]:
-                item = self._add_corners(items[i], 10).resize((35, 35))
-                item_x = items_pos_mapping[i][0]
-                item_y = items_pos_mapping[i][1]
-                img.paste(item, (item_x, item_y), item)
-
-        # Defining draw
+        # # Defining draw
         draw = ImageDraw.Draw(img)
 
-        if pseudo:
-            self._draw_text_center(draw, pseudo, (35, 20+70), (155, 28), self.font, "white")
-        if rank:
-            self._draw_text_center(draw, rank, (34, 34+72), (165, 80), self.fontSmall, "white")
         if gameMode:
-            self._draw_text_center(draw, gameMode, (30, 68+71), (175, 90), self.fontSmall2, "white")
-        if lvl:
-            self._draw_text_center(draw, str(lvl), (36, 289), (30, 30), self.fontSmall2, "white")
-        if status:
-            self._draw_text_center(draw, status, (303, 32+71), (30, 30), self.font, f'green' if status == 'Victoire' else 'red')
-        if time:
-            self._draw_text_center(draw, time, (303, 68+72), (30, 30), self.fontSmall3, "white")
-        if kda:
-            self._draw_text_center(draw, kda, (303, 92+71), (30, 30), self.fontSmall3, "white")
-        if text1:
-            self._draw_text_center(draw, text1, (303, 116+70), (30, 30), self.fontSmall3, "white")
-        if text2:
-            self._draw_text_center(draw, text2, (303, 137+72), (30, 30), self.fontSmall3, "white")
+            self._draw_text_center(draw, gameMode, (1467, 40), (754, 98), self.font, "white")
 
         # Images
         if results[0] and results[1]:
-            self._draw_text_center(draw, results[0], (35+422+67, 18), (155, 28), self.font, "green" if results[0] == 'Victoire' else 'red')
-            self._draw_text_center(draw, results[1], (35+422+67+275, 18), (155, 28), self.font, "green" if results[1] == 'Victoire' else 'red')
+            self._draw_text_center(draw, results[0], (165, 60), (754, 98), self.font, "green" if results[0] == 'Victoire' else 'red')
+            self._draw_text_center(draw, results[1], (2776, 60), (754, 98), self.font, "green" if results[1] == 'Victoire' else 'red')
 
-        h_step = 65
+        h_step = 510
         players_pos_mapping = {
             "left": {
-                "avatar": (464, 63),
-                "sums0": (475, 101),
-                "sums1": (475+13, 101),
-                "rune": (475-13, 101),
-                "item0": (651, 63),
-                "item1": (651+19, 63),
-                "item2": (651+19+19, 63),
-                "item3": (651, 63+20),
-                "item4": (651+19, 63+20),
-                "item5": (651+19+19, 63+20),
-                "item6": (651+19+19+19, 63+20),
-                "pseudo": (35+422, 90-26),
-                "rank": (34+420, 34+50-27),
-                "lvl": (443, 92),
-                "kda": (595, 60),
-                "text1": (595, 74),
-                "text2": (595, 88)
+                "avatar": (168, 272),
+                "sums0": (228, 592),
+                "sums1": (350, 592),
+                "rune": (115, 588),
+                "item0": (1177, 270),
+                "item1": (1177+125, 270),
+                "item2": (1177+125+125, 270),
+                "item3": (1177, 270+120),
+                "item4": (1177+125, 270+120),
+                "item5": (1177+125+125, 270+120),
+                "item6": (1177+125+125+125, 270+120),
+                "pseudo": (494, 245),
+                "rank": (490, 370),
+                "lvl": (127, 510),
+                "kda": (1400, 520),
+                "text1": (490, 500)
             },
             "right": {
-                "avatar": (464+267+259, 63),
-                "sums0": (475+526, 101),
-                "sums1": (475+526-13, 101),
-                "rune": (475+526+13, 101),
-                "item0": (821, 63),
-                "item1": (821-19, 63),
-                "item2": (821-19-19, 63),
-                "item3": (821, 63+20),
-                "item4": (821-19, 63+20),
-                "item5": (821-19-19, 63+20),
-                "item6": (821-19-19-19, 63+20),
-                "pseudo": (35+422+267+150, 90-26),
-                "rank": (34+420+267+150, 34+50-27),
-                "lvl": (443+267+304, 92),
-                "kda": (595+267, 60),
-                "text1": (595+267, 74),
-                "text2": (862, 88)
+                "avatar": (3232, 272),
+                "sums0": (3240, 593),
+                "sums1": (3360, 592),
+                "rune": (3472, 588),
+                "item0": (2415, 270),
+                "item1": (2415-125, 270),
+                "item2": (2415-125-125, 270),
+                "item3": (2415, 270+120),
+                "item4": (2415-125, 270+120),
+                "item5": (2415-125-125, 270+120),
+                "item6": (2415-125-125-125, 270+120),
+                "pseudo": (2542, 245),
+                "rank": (2540, 370),
+                "lvl": (3550, 512),
+                "kda": (2250, 520),
+                "text1": (2540, 500)
             }
         }
         
@@ -417,63 +396,62 @@ class LolGameDrawer:
             idx = i if i < 5 else i - 5
 
             if player["championIcon"]:
-                avatar = self._add_corners(player["championIcon"], 10).resize((35, 35))
+                avatar = self._add_corners(player["championIcon"], 10).resize((298, 298))
                 img.paste(avatar, (pos["avatar"][0], pos["avatar"][1] + (h_step * idx)), avatar) # Champion Icon
 
             if player["sums"][0]:
-                summoner1 = self._add_corners(player["sums"][0], 10).resize((12, 12))
+                summoner1 = self._add_corners(player["sums"][0], 10).resize((100, 100))
                 img.paste(summoner1, (pos["sums0"][0], pos["sums0"][1] + (h_step * idx)), summoner1) # Summoner 1
             
             if player["sums"][1]:
-                summoner2 = self._add_corners(player["sums"][1], 10).resize((12, 12))
+                summoner2 = self._add_corners(player["sums"][1], 10).resize((100, 100))
                 img.paste(summoner2, (pos["sums1"][0], pos["sums1"][1] + (h_step * idx)), summoner2) # Summoner 2
 
             if player["rune"]:
-                rune = self._remove_white_background(player["rune"]).resize((12, 12))
+                rune = self._remove_white_background(player["rune"]).resize((100,100))
                 img.paste(rune, (pos["rune"][0], pos["rune"][1] + (h_step * idx)), rune) # Rune
 
             for j in range(7):
                 if player["items"][j]:
-                    item = self._add_corners(player["items"][j], 10).resize((16, 17))
+                    item = self._add_corners(player["items"][j], 10).resize((100, 100))
                     item_x = pos[f"item{j}"][0]
                     item_y = pos[f"item{j}"][1] + (h_step * idx)
                     img.paste(item, (item_x, item_y), item) # Item j
 
             # Pseudo
             if len(player["pseudo"]) > 7:
-                self._draw_text_center(draw, player["pseudo"], (pos["pseudo"][0], pos["pseudo"][1] + (h_step * idx)), (155, 28), self.smalll2, "white")
+                self._draw_text_center(draw, player["pseudo"], (pos["pseudo"][0], pos["pseudo"][1] + (h_step * idx)), (664, 100), self.smalll2, "white")
             else:
-                self._draw_text_center(draw, player["pseudo"], (pos["pseudo"][0], pos["pseudo"][1] + (h_step * idx)), (155, 28), self.smalll, "white")
+                self._draw_text_center(draw, player["pseudo"], (pos["pseudo"][0], pos["pseudo"][1] + (h_step * idx)), (664, 100), self.smalll, "white")
             # Rank
             if player["rank"]:
-                self._draw_text_center(draw, player["rank"], (pos["rank"][0], pos["rank"][1] + (h_step * idx)), (165, 80), self.smalll, "white")
+                division, tier = player["rank"].strip().split(" ")
+                _rank = f"{division} {tier.capitalize()}"
+                self._draw_text_center(draw, _rank, (pos["rank"][0], pos["rank"][1] + (h_step * idx)), (664, 100), self.smalll, "white")
             # Level
             if player["lvl"]:
                 self._draw_text_center(draw, str(player["lvl"]), (pos["lvl"][0], pos["lvl"][1] + (h_step * idx)), (30, 30), self.smalll2, "white")
             # KDA
             if player["kda"]:
-                self._draw_text_center(draw, player["kda"], (pos["kda"][0], pos["kda"][1] + (h_step * idx)), (30, 30), self.smalll, "white")
+                self._draw_text_center(draw, player["kda"], (pos["kda"][0], pos["kda"][1] + (h_step * idx)), (30, 30), self.font, "white")
             # Text1
-            if player["text1"]:
-                self._draw_text_center(draw, player["text1"], (pos["text1"][0], pos["text1"][1] + (h_step * idx)), (30, 30), self.smalll, "white")
-            # Text2
-            if player["text2"]:
-                self._draw_text_center(draw, player["text2"], (pos["text2"][0], pos["text2"][1] + (h_step * idx)), (30, 30), self.smalll, "white")
+            if player["text1"] and player["text2"]:
+                self._draw_text_center(draw, f"{player['text1']} - {player['text2']}", (pos["text1"][0], pos["text1"][1] + (h_step * idx)), (664, 100), self.fontSmall3, "white")
         
-        l_step = 30
+        l_step = 177
         sep = 108
         for i, ban in enumerate(bans):
             if i < 5:
                 if ban:
                     try:
-                        ban = ban.resize((26, 26))
-                        img.paste(ban, (62+422+70+26+(l_step*i), 400-7), ban)
+                        ban = ban.resize((150, 150))
+                        img.paste(ban, (555+(l_step*i), 2787), ban)
                     except: continue
             else:
                 if ban:
                     try:
-                        ban = ban.resize((26, 26))
-                        img.paste(ban, (62+422+70+26+sep+(l_step*i), 400-7), ban)
+                        ban = ban.resize((150, 150))
+                        img.paste(ban, (2538+(l_step*(i-5)), 2787), ban)
                     except: continue
         # Saving image
         fp = io.BytesIO()
@@ -481,6 +459,89 @@ class LolGameDrawer:
         img.save(f"{FILES_PATH}{mentions}-game.png")
         return
     
+    def draw_player(self, discordId: int, pseudo: str, rank: str, gameMode: str, championIcon: io.BytesIO, lvl: str, rune, sums1, sums2, status: str, time: int, kda: str, text1: str, text2: str, mastery_gained: str, mastery_level: str, mastery_points: str, mastery_image: Image.Image, items: list):
+        """Draws the League of Legends player image."""
+        img = Image.open(LOL_DRAFT_PLAYER_IMG).convert("RGBA")
+
+        if championIcon:
+            avatar = self._add_corners(championIcon, 10).resize((212, 212))
+            img.paste(avatar, (85, 315), avatar) # Champion Icon
+            img.paste(avatar, (800, 44), avatar)
+        
+        
+        if mastery_image:
+            if isinstance(mastery_image, Image.Image):
+                mastery_image = mastery_image.resize((212, 212)).convert("RGBA")
+                img.paste(mastery_image, (802, 265), mastery_image)
+        
+        if rune:
+            rune = self._remove_white_background(rune).resize((70, 70))
+            img.paste(rune, (77, 550), rune) # Rune
+
+        if sums1:
+            summoner1 = self._add_corners(sums1, 10).resize((70, 70))
+            img.paste(summoner1, (152, 547), summoner1) # Summoner 1
+        
+        if sums2:
+            summoner2 = self._add_corners(sums2, 10).resize((70, 70))
+            img.paste(summoner2, (227, 547), summoner2) # Summoner 2
+
+        items_pos_mapping = { 
+            0: (418, 458),
+            1: (418+94, 458),
+            2: (418+94+94, 458),
+            3: (418, 560),
+            4: (418+94, 560),
+            5: (418+94+94, 560),
+            6: (418-94, 560)
+            
+        }
+        for i in range(7): # Main Player Items
+            if items[i]:
+                item = self._add_corners(items[i], 10).resize((90, 90))
+                item_x = items_pos_mapping[i][0]
+                item_y = items_pos_mapping[i][1]
+                img.paste(item, (item_x, item_y), item) # Item i
+
+        draw = ImageDraw.Draw(img)
+        if pseudo:
+            self._draw_text_center(draw, pseudo, (37, 60), (311, 58), self.font_medium, "white")
+
+        if rank:
+            self._draw_text_center(draw, rank, (37, 147), (311, 58), self.font_medium2, "white")
+
+        if gameMode:
+            self._draw_text_center(draw, gameMode, (37, 222), (311, 58), self.font_medium2, "white")
+
+        if lvl:
+            self._draw_text_center(draw, str(lvl), (46, 517), (40, 40), self.font_medium2, "white")
+
+        if status:
+            self._draw_text_center(draw, status, (400, 50), (307, 38), self.fontSmall3, f'green' if status == 'Victoire' else 'red')
+
+        if time:
+            self._draw_text_center(draw, f"{time}", (400, 128), (307, 38), self.fontSmall3, "white")
+
+        if kda:
+            self._draw_text_center(draw, kda, (400, 205), (307, 38), self.fontSmall3, "white")
+
+        if text1:
+            self._draw_text_center(draw, f"{text1}", (400, 292), (307, 38), self.font_medium, "white")
+        
+        if text2:
+            self._draw_text_center(draw, f"{text2}", (400, 370), (307, 38), self.font_medium, "white")
+        
+        if mastery_level:
+            self._draw_text_center(draw, f"Mastery {mastery_level}", (780, 478), (249, 52), self.font_medium, "white")
+
+        if mastery_points:
+            self._draw_text_center(draw, mastery_points, (780, 542), (249, 52), self.font_medium3, "white")
+
+        if mastery_gained:
+            self._draw_text_center(draw, mastery_gained, (845, 602), (121, 52), self.font_medium2, "white")
+
+        img.save(f"{FILES_PATH}{discordId}-player.png")
+
     def draw_swarm(self, players: List[dict], gamedata: dict):
         def minutes_to_time(minutes: int) -> str:
             hours = minutes // 60

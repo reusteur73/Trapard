@@ -1,6 +1,7 @@
 MAIN_DIR="/home/dreus/trapard/"
 VARS=f"{MAIN_DIR}files/vars.txt"
-LOL_IMAGE=f"{MAIN_DIR}files/NewMain.png"
+LOL_IMAGE=f"{MAIN_DIR}files/draft_game_placeholder.png"
+LOL_DRAFT_PLAYER_IMG=f"{MAIN_DIR}files/draft_player_placeholder.png"
 LOL_IMAGE_ARENA=f"{MAIN_DIR}files/Arena.png"
 LOL_FONT=f"{MAIN_DIR}files/Inter-Bold.ttf"
 FILES_PATH=f"{MAIN_DIR}files/"

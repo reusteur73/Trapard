@@ -1,5 +1,6 @@
 import discord, os, io, traceback, asyncio, difflib
 from discord.ext import commands, tasks
+from discord import ui
 from .utils.functions import afficher_nombre_fr, LogErrorInWebhook, getVar
 from .utils.path import FILES_PATH
 from .utils.RiotCore import RiotAPI, RiotAssetsAPI, LolGameDrawer
@@ -20,6 +21,40 @@ class GameLink(discord.ui.View):
         super().__init__(timeout=None)
         self.embed = embed
         self.add_item(discord.ui.Button(label="Voir plus", url=link))
+
+class LolGameMessage(ui.LayoutView):
+    """Custom view for displaying League of Legends game details with an image and buttons."""
+    def __init__(self, *,image_path:str, footer_text:str, match_id:str, region: str, name_tagline: str, timeout: float = 180, image_path2:str=None) -> None:
+        super().__init__(timeout=timeout)
+        file = discord.File(image_path, filename="Game.png")
+        gallery = ui.MediaGallery(
+            discord.MediaGalleryItem(media=file, description="Image de la partie League of Legends")
+        )
+        
+        if image_path2 is not None:
+            file2 = discord.File(image_path2, filename="Player.png")
+            gallery2 = ui.MediaGallery(
+                discord.MediaGalleryItem(media=file2, description="Image du joueur")
+            )
+
+        text = ui.TextDisplay("Voici les détails de ta partie League of Legends !")
+        separator = ui.Separator(
+            spacing = discord.SeparatorSpacing.large,
+            visible = True,
+        )
+        footer = ui.TextDisplay(f"-# {footer_text}")
+
+        container = ui.Container(gallery)
+        
+        buttons_row = ui.ActionRow().add_item(discord.ui.Button(style=discord.ButtonStyle.green, label="Voir la game sur League of Graphs", url=f"https://www.leagueofgraphs.com/match/{region}/{match_id}")).add_item(discord.ui.Button(style=discord.ButtonStyle.green, label="Voir le profil du joueur", url=f"https://www.leagueofgraphs.com/summoner/{region}/{name_tagline.replace(' ','%20')}"))
+        if image_path2 is not None:
+            container1 = ui.Container(gallery2, text, buttons_row, separator, footer)
+        else: 
+            container1 = ui.Container(text, buttons_row, separator, footer)
+    
+        self.add_item(container)
+        self.add_item(container1)
+
 
 class LolGames(commands.Cog):
     def __init__(self, bot: Trapard) -> None:
@@ -216,7 +251,16 @@ class LolGames(commands.Cog):
                         new_data = await self.riot_api.get_player_champion_mastery(puuid, region, champion_id)
                         if new_data.data is not None:
                             await conn.execute("UPDATE LoLChampionsMastery SET mastery_level = ?, mastery_points = ?, points_since_last_level = ?, points_until_next_level = ? WHERE puuid = ? AND champion_id = ?", (new_data.data['championLevel'], new_data.data['championPoints'], new_data.data['championPointsSinceLastLevel'], new_data.data['championPointsUntilNextLevel'], puuid, champion_id))
-                        return new_data.data['championPoints'] - data
+                        image_level = new_data.data['championLevel'] if new_data.data is not None else 0
+                        if image_level > 10:
+                            image_level = 10
+                        output = {
+                            "gained_points": (new_data.data['championPoints'] - data) if new_data.data is not None else 0,
+                            "current_progression": f"{new_data.data['championPointsSinceLastLevel']} / {new_data.data['championPointsUntilNextLevel']}" if new_data.data is not None else "0 / 0",
+                            "current_level": new_data.data['championLevel'] if new_data.data is not None else 0,
+                            "mastery_image_url": f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{image_level}.cm_updates.png" if new_data.data is not None else None
+                        }
+                        return output
 
             async def track_ranked_progression(puuid: str, region: str):
                 """Track and update the ranked progression for a player and return the LP change since last check."""
@@ -274,8 +318,8 @@ class LolGames(commands.Cog):
                                 await conn.execute("UPDATE LoLGamesTracker SET rank = ?, rank_tier = ?, league_points = ? WHERE puuid = ?", (new_rank["tier"], new_rank.get("rank", "N/A"), new_rank["leaguePoints"], puuid))
                                 if old_data == ("Unranked", "Unranked", 0): return 0
                                 lp_change = _process_lp_change(old_data, new_data)
-                                return lp_change
-                        return 0
+                                return lp_change, new_rank["tier"], new_rank.get("rank", "N/A"), new_rank["leaguePoints"] # return lp_change, new_rank_tier, new_rank_division, new_rank_lp
+                        return 0, None, None, None
 
             async def task(data):
                 try:
@@ -313,7 +357,7 @@ class LolGames(commands.Cog):
                                 queuetype = await self.riot_assets_api.get_queue_by_id(queuetype)
                                 saison, patch, patch2 = api_version.split(".")
                                 footer = f'Match {last_match.split("_")[1]} · {raw_data["info"]["platformId"]} · Patch {patch}.{patch2} · Saison {saison} · Game Version {game_version} · Powered by Riot API · Generated by reusreus'
-                                lp_change = None
+                                ranked_text = None
                                 if raw_data["info"]["gameMode"] == "STRAWBERRY": # THIS IS Straw game mode
                                     try:
                                         players = []
@@ -391,9 +435,11 @@ class LolGames(commands.Cog):
                                             await conn.execute("UPDATE LoLGamesTracker SET last_game_id = ? WHERE puuid = ?", (last_match, puuid))
                                     continue
                                 elif raw_data["info"]["queueId"] == 420: # Ranked Solo/Duo
-                                    lp_change = await track_ranked_progression(puuid, region)
+                                    lp_change, new_rank_tier, new_rank_division, new_rank_lp = await track_ranked_progression(puuid, region)
+                                    ranked_text = f"{new_rank_tier.title()} {new_rank_division} - {new_rank_lp} LP (+{lp_change})" if new_rank_tier is not None else ""
                                 try:
-                                    mastery_gain = await save_champion_mastery(int(champion_id), puuid, region)
+                                    mastery_data = await save_champion_mastery(int(champion_id), puuid, region)
+                                    mastery_image = await self.riot_assets_api.get_mastery_icon(mastery_data['current_level'])
                                     channel = self.bot.get_channel(1112233401286672394)
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
                                     player_list, results, bans = await get_game_data(raw_data, api_version)
@@ -402,20 +448,22 @@ class LolGames(commands.Cog):
                                             if participant["summonerId"] == "BOT":
                                                 player_list[n]["pseudo"] = str(participant["riotIdGameName"]).replace("Ruby_","").title().strip()
                                                 player_list[n]["championIcon"] = await self.riot_assets_api.get_champion_icon(str(participant["championName"]).replace("Ruby_",""), api_version)
-                                    await asyncio.to_thread(self.lol_game_drawer.draw_game, pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items, player_list, results, bans, mentions)
+                                    if ranked_text is not None:
+                                        rank = ranked_text
+                                    await asyncio.to_thread(self.lol_game_drawer.draw_game, queuetype, player_list, results, bans, mentions)
+                                    await asyncio.to_thread(self.lol_game_drawer.draw_player, discordId=mentions, pseudo=pseudo, rank=rank, gameMode=queuetype, championIcon=champion_icon, lvl=lvl, rune=rune, sums1=sum1, sums2=sum2, status=games_status, time=game_duartion_to_min, kda=kda, text1=text1, text2=text2, mastery_level=mastery_data['current_level'], mastery_points=mastery_data['current_progression'],mastery_gained=mastery_data['gained_points'], mastery_image=mastery_image, items=items)
                                     file = discord.File(f"{FILES_PATH}{mentions}-game.png", filename=f"Game.png")
-                                    embed = discord.Embed(title=f"LoL Game", description=f"<@{mentions}>", color=0x2F3136)
-                                    embed.set_footer(text=footer)
-                                    embed.set_thumbnail(url=champion_icon_url)
-                                    embed.set_author(name=long_name, icon_url=summoner_icon_url)
-                                    embed.set_image(url=f"attachment://Game.png")
+                                    file2 = discord.File(f"{FILES_PATH}{mentions}-player.png", filename=f"Player.png")
                                     gameID = raw_data["metadata"]["matchId"].split("_")[1]
                                     if raw_data["info"]["platformId"] == "OC1": _region = "oce"
                                     elif raw_data["info"]["platformId"].upper() == "EUW1": _region = "euw"
                                     else: _region = raw_data["info"]["platformId"].lower()
-                                    await channel.send(file=file, embed=embed, view=GameLink(f"https://www.leagueofgraphs.com/match/{_region}/{gameID}"))
-                                    os.remove(f"{FILES_PATH}{mentions}-game.png")
+                                    layout = LolGameMessage(image_path=f"{FILES_PATH}{mentions}-game.png", image_path2=f"{FILES_PATH}{mentions}-player.png", footer_text=footer, match_id=gameID, region=_region, name_tagline=pseudo)
+                                    await channel.send(files=[file,file2], view=layout)
                                     await save_new_match(last_match, puuid)
+                                    await asyncio.sleep(1)
+                                    # os.remove(f"{FILES_PATH}{mentions}-game.png")
+                                    # os.remove(f"{FILES_PATH}{mentions}-player.png")
                                     continue
                                 except Exception as e:
                                     LogErrorInWebhook(f"[LOL 0x05] Erreur sur le match `{last_match}`\npuuid: `{puuid}`\n{e}\n{traceback.format_exc()}")
@@ -431,9 +479,10 @@ class LolGames(commands.Cog):
         except Exception as e:
             LogErrorInWebhook()
 
-    @tasks.loop(seconds=45)
+    @tasks.loop(minutes=1)
     async def current_game_lol_tracker(self):
         try:
+            # self.checheck_lol_games()
             api_version = await self.riot_api.get_api_version()
             async with self.bot.pool.acquire() as conn:
                 data = await conn.fetchall("SELECT puuid, region, userId FROM LoLGamesTracker")
@@ -710,6 +759,15 @@ class LolGames(commands.Cog):
             except Exception as e:
                 traceback.print_exc()
                 return await ctx.send(f"Erreur lors de la récupération des données !2\n```{e}```")	
+
+    @commands.command()
+    async def test(self, ctx: commands.Context):
+        """Test command."""
+        print("TEST")
+        file = discord.File(f"{FILES_PATH}test_game.png", filename="Game.png")
+        file2 = discord.File(f"{FILES_PATH}test_player.png", filename="Player.png")
+        view = LolGameMessage(image_path=f"{FILES_PATH}test_game.png", footer_text="Footer de test", image_path2=f"{FILES_PATH}test_player.png")
+        await ctx.send(view=view, files=[file, file2])
 
 async def setup(bot: Trapard):
     await bot.add_cog(LolGames(bot))
