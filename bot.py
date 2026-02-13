@@ -91,6 +91,10 @@ class Trapard(commands.Bot):
         # Setting db 
         self.pool: asqlite.Pool = await asqlite.create_pool(DB_PATH)
         self.pool_2: asqlite.Pool = await asqlite.create_pool(DB_PATH_2)
+        async with self.pool.acquire() as conn:
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            await conn.execute("PRAGMA synchronous=NORMAL;")
+            await conn.execute("PRAGMA busy_timeout = 5000;")
 
         nodes = [wavelink.Node(uri="http://127.0.0.1:2333", password=getVar("LAVALINK_PWD"))]
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=None)

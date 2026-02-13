@@ -9,4 +9,4 @@ Python-3.*
 requirements.txt
 trapard_venv/
 .vscode/
-test*.py
+test*

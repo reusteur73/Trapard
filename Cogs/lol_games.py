@@ -760,15 +760,6 @@ class LolGames(commands.Cog):
                 traceback.print_exc()
                 return await ctx.send(f"Erreur lors de la récupération des données !2\n```{e}```")	
 
-    @commands.command()
-    async def test(self, ctx: commands.Context):
-        """Test command."""
-        print("TEST")
-        file = discord.File(f"{FILES_PATH}test_game.png", filename="Game.png")
-        file2 = discord.File(f"{FILES_PATH}test_player.png", filename="Player.png")
-        view = LolGameMessage(image_path=f"{FILES_PATH}test_game.png", footer_text="Footer de test", image_path2=f"{FILES_PATH}test_player.png")
-        await ctx.send(view=view, files=[file, file2])
-
 async def setup(bot: Trapard):
     await bot.add_cog(LolGames(bot))
     

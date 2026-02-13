@@ -2787,15 +2787,6 @@ class Music(commands.Cog):
             player.autoplay = AutoPlayMode.disabled
         await ctx.message.add_reaction("\u2705")
 
-    @commands.command()
-    async def test(self, ctx: commands.Context):
-        """Test command."""
-        print("TEST")
-        view = MusicMessageView(bot=self.bot, ctx=ctx, serverid=ctx.guild.id)
-        files = [getattr(view, "thumb_file", None)]
-        files = [f for f in files if f is not None]
-        await ctx.send(view=view, files=files)
-
 async def handle_sb(ctx: commands.Context, bot, userId: int=None):
     """Affiche les sons de la soundboard."""
     try:
