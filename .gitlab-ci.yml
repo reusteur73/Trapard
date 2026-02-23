@@ -9,6 +9,7 @@ variables:
   PYTHONUNBUFFERED: "1"
 
 before_script:
+  - echo "CI_JOB_TOKEN=${CI_JOB_TOKEN:0:4}****"
   - python -m venv venv
   - . venv/bin/activate
   - pip install --upgrade pip
