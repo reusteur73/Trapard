@@ -21,3 +21,4 @@ test_bot:
     - docker
   script:
     - timeout 60s python luncher.py
+ 
