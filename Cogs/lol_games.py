@@ -254,6 +254,8 @@ class LolGames(commands.Cog):
                         image_level = new_data.data['championLevel'] if new_data.data is not None else 0
                         if image_level > 10:
                             image_level = 10
+                        elif image_level in [1, 2, 3]:
+                            image_level = 4
                         output = {
                             "gained_points": (new_data.data['championPoints'] - data) if new_data.data is not None else 0,
                             "current_progression": f"{new_data.data['championPointsSinceLastLevel']} / {new_data.data['championPointsUntilNextLevel']}" if new_data.data is not None else "0 / 0",
