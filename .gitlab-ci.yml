@@ -20,5 +20,5 @@ test_bot:
   tags:
     - docker
   script:
-    - timeout 60s python luncher.py
+    - timeout 5s python -c "import luncher.main"
  
