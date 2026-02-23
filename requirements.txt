@@ -13,3 +13,4 @@ undetected-chromedriver==3.5.4
 beautifulsoup4==4.11.2
 youtube_search==2.1.2
 pytube==15.0.0
+wavelink==3.3.0
