@@ -16,5 +16,7 @@ before_script:
 
 test_bot:
   stage: test
+  tags:
+    - docker
   script:
     - timeout 60s python luncher.py
