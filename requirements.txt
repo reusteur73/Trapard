@@ -14,3 +14,4 @@ beautifulsoup4==4.11.2
 youtube_search==2.1.2
 pytube==15.0.0
 wavelink==3.3.0
+isodate==0.7.2
