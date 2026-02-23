@@ -1,0 +1,20 @@
+image: python:3.10-slim
+
+stages:
+  - test
+
+variables:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+
+before_script:
+  - python -m venv venv
+  - . venv/bin/activate
+  - pip install --upgrade pip
+  - pip install -r requirements.txt
+
+test_bot:
+  stage: test
+  script:
+    - timeout 60s python luncher.py

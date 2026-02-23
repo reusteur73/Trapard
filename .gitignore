@@ -6,7 +6,6 @@ Cogs/utils/asqlite/
 venv/
 lava/
 Python-3.*
-requirements.txt
 trapard_venv/
 .vscode/
 test*
