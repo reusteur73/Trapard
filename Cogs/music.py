@@ -2840,7 +2840,11 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
                 from_web = from_mlist
             vc.autoplay = wavelink.AutoPlayMode.enabled
             video = await get_Video_from_input(from_web, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
-            if isinstance(video, discord.ui.View):
+            if isinstance(video, discord.ui.View): # Prompted user to choose a video
+                sleep(120)
+                if not vc.playing: # User didn't choose a video in time, disconnecting from vocal
+                    await vc.disconnect()
+                    await ctx.send(embed=create_embed(title="Musique", description="Aucune musique n'a été choisie, je me déconnecte du vocal."), ephemeral=True)
                 return
             _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
             if len(_track) > 0:
