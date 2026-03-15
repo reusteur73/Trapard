@@ -7,19 +7,117 @@ from pytube import YouTube # type: ignore
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar, parse_name_tuple, save_song_stats, format_duration, get_latest_message_from_channel, iso_to_eslapsed_time
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER, MAIN_DIR
 from .utils.context import Context as CustomContext
-import traceback, random, os, asyncio, threading, base64, io, discord, wavelink, isodate , html, datetime, re, ast # type: ignore
+import traceback, random, os, asyncio, threading, base64, io, discord, lavalink, isodate , html, datetime, re, ast # type: ignore
 from asqlite import Pool
 from PIL import Image, ImageDraw, ImageFont
-from wavelink import AutoPlayMode, Player
 from aiohttp import ClientSession
 from asyncio import sleep
 
 music_table = "musiquesV3"
 
+class LavalinkVoiceClient(discord.VoiceProtocol):
+    """
+    This is the preferred way to handle external voice sending
+    This client will be created via a cls in the connect method of the channel
+    see the following documentation:
+    https://discordpy.readthedocs.io/en/latest/api.html#voiceprotocol
+    """
+
+    def __init__(self, client: discord.Client, channel: discord.abc.Connectable):
+        self.client = client
+        self.channel = channel
+        self.guild_id = channel.guild.id
+        self._destroyed = False
+
+        if not hasattr(self.client, 'lavalink'):
+            # Instantiate a client if one doesn't exist.
+            self.client.lavalink = lavalink.Client(client.user.id)
+            self.client.lavalink.add_node(
+                host='127.0.0.1',
+                port=2333,
+                password=getVar("LAVALINK_PWD"),
+                region='us',
+                name='default-node'
+            )
+
+        # Create a shortcut to the Lavalink client here.
+        self.lavalink = self.client.lavalink
+
+    async def on_voice_server_update(self, data):
+        # the data needs to be transformed before being handed down to
+        # voice_update_handler
+        lavalink_data = {
+            't': 'VOICE_SERVER_UPDATE',
+            'd': data
+        }
+        await self.lavalink.voice_update_handler(lavalink_data)
+
+    async def on_voice_state_update(self, data):
+        channel_id = data['channel_id']
+
+        if not channel_id:
+            await self._destroy()
+            return
+
+        self.channel = self.client.get_channel(int(channel_id))
+
+        # the data needs to be transformed before being handed down to
+        # voice_update_handler
+        lavalink_data = {
+            't': 'VOICE_STATE_UPDATE',
+            'd': data
+        }
+
+        await self.lavalink.voice_update_handler(lavalink_data)
+
+    async def connect(self, *, timeout: float, reconnect: bool, self_deaf: bool = False, self_mute: bool = False) -> None:
+        """
+        Connect the bot to the voice channel and create a player_manager
+        if it doesn't exist yet.
+        """
+        # ensure there is a player_manager when creating a new voice_client
+        self.lavalink.player_manager.create(guild_id=self.channel.guild.id)
+        await self.channel.guild.change_voice_state(channel=self.channel, self_mute=self_mute, self_deaf=self_deaf)
+
+    async def disconnect(self, *, force: bool = False) -> None:
+        """
+        Handles the disconnect.
+        Cleans up running player and leaves the voice client.
+        """
+        player = self.lavalink.player_manager.get(self.channel.guild.id)
+
+        # no need to disconnect if we are not connected
+        if not force and not player.is_connected:
+            return
+
+        # None means disconnect
+        await self.channel.guild.change_voice_state(channel=None)
+
+        # update the channel_id of the player to None
+        # this must be done because the on_voice_state_update that would set channel_id
+        # to None doesn't get dispatched after the disconnect
+        player.channel_id = None
+        await self._destroy()
+
+    async def _destroy(self):
+        self.cleanup()
+
+        if self._destroyed:
+            # Idempotency handling, if `disconnect()` is called, the changed voice state
+            # could cause this to run a second time.
+            return
+
+        self._destroyed = True
+
+        try:
+            await self.lavalink.player_manager.destroy(self.guild_id)
+        except Exception:
+            pass
+
 class ServerUI:
     def __init__(self, bot, player, downloader_id, track_name, track_index, track_duration, txt_channel_id, auto_queue: Optional[List[VideoDB]], _video=None):
         self.bot = bot
-        self.player: Player = player
+        self.player = player
         self.downloader_id = downloader_id
         self.avatar = None
         self.track_name = track_name
@@ -50,7 +148,16 @@ class ServerUI:
                 self.bot.server_music_session[self.guild_id] = {'time': 0, 'nb': 0}
 
             if not self._video:
-                self.video = VideoDB.from_row(dict(self.player.current.extras))
+                try:
+                    self.video = VideoDB.from_row(dict(self.player.current.extra))
+                except Exception:
+                    result = await download(pool=self.bot.pool, session=self.bot.session, video_id=self.player.current.identifier, downloader=1065781211219370104, is_autoplay=True)
+                    if isinstance(result, VideoDB):
+                        self.video = result
+                        self.player.current.extra = result.to_dict()
+                        self.player.current.extra['txt_channel_id'] = self.txt_channel_id
+                    else:
+                        raise
             else:
                 self.video = self._video
 
@@ -60,12 +167,17 @@ class ServerUI:
             self.ui_message = await txt_channel.send(file=file, view=waiting_layout)
 
             iteration = 0
-            while self.player.playing and self._running:
+            while self.player.is_playing and self._running:
                 iteration += 1
                 self.played_time = self.player.position / 1000
                 try:
-                    self.next_musics = [VideoDB.from_row(music.extras) for music in self.player.queue[:8]]
-                    if self.player.autoplay == wavelink.AutoPlayMode.enabled and len(self.auto_queue) > 0 and len(self.next_musics) < 5:
+                    self.next_musics = []
+                    for music in self.player.queue[:8]:
+                        try:
+                            self.next_musics.append(VideoDB.from_row(music.extra))
+                        except Exception:
+                            continue
+                    if self.player.is_playing and len(self.auto_queue) > 0 and len(self.next_musics) < 5:
                         for i in range(min(3, len(self.auto_queue))):
                             self.next_musics.append(self.auto_queue[i])
                     try:
@@ -213,13 +325,13 @@ class MusicEndView(ui.LayoutView):
 
 class MusicMessageView(ui.LayoutView):
     """View principale affichée pendant la lecture d'une musique, avec les boutons d'interaction et l'image youtube de la musique."""
-    def __init__(self, *, bot, ctx, serverid: int, player: wavelink.Player=None, timeout: Optional[float] = 180, music_title: str="") -> None:
+    def __init__(self, *, bot, ctx, serverid: int, player=None, timeout: Optional[float] = 180, music_title: str="") -> None:
         super().__init__(timeout=timeout)
         try:
             self.bot = bot
             self.ctx = ctx
             if player is None:
-                player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+                player = self.bot.lavalink.player_manager.get(ctx.guild.id)
             self.player = player
             self.thumb_file = discord.File(f"{MAIN_DIR}/files/{serverid}_music_player.png", filename=f"Music.png")
             self.text = ui.TextDisplay(f'## {music_title if music_title else "Musique en cours..."}')
@@ -235,23 +347,27 @@ class MusicMessageView(ui.LayoutView):
             row1 = ui.ActionRow()
 
             # Previous Button
+            prev_song_btn = ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True)
             if serverid in self.bot.last_music:
-                prev_song_btn = ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True) # temp disabled
-            else:
-                prev_song_btn = ui.Button(label="Musique d'avant", style=discord.ButtonStyle.primary, emoji="⬅", custom_id="prev", row=0, disabled=True)
+                prev_song_btn.disabled = False
             row1.add_item(prev_song_btn)
             prev_song_btn.callback = lambda interaction=self.ctx, button=prev_song_btn: self.button_callback(interaction, button)
             
-            # AutoPlay Button
-            if self.player is not None and self.player.autoplay.name == "enabled":
-                autoplay_button = ui.Button(label="AutoPlay On", style=discord.ButtonStyle.green, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
-            else:
-                autoplay_button = ui.Button(label="AutoPlay Off", style=discord.ButtonStyle.red, emoji="🎲", custom_id="autoplay", row=0, disabled=False)
+            # AutoPlay Button - simplified for lavalink.py
+            autoplay_is_on = getattr(self.bot, 'autoplay_enabled', {}).get(serverid, True)
+            autoplay_button = ui.Button(
+                label=f"AutoPlay: {'ON' if autoplay_is_on else 'OFF'}",
+                style=discord.ButtonStyle.success if autoplay_is_on else discord.ButtonStyle.secondary,
+                emoji="🎲" if autoplay_is_on else "⛔",
+                custom_id="autoplay",
+                row=0,
+                disabled=False,
+            )
             row1.add_item(autoplay_button)
             autoplay_button.callback = lambda interaction=self.ctx, button=autoplay_button: self.button_callback(interaction, button)
 
-            # Skip Button
-            if (len(player.queue) > 0) or (player.autoplay.name == "enabled"):
+            # Skip Button - simplified for lavalink.py
+            if len(player.queue) > 0:
                 next_button = ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0)
             else:
                 next_button = ui.Button(label="Musique d'après", style=discord.ButtonStyle.primary, emoji="➡", custom_id="skip", row=0, disabled=True)
@@ -259,21 +375,21 @@ class MusicMessageView(ui.LayoutView):
             next_button.callback = lambda interaction=self.ctx, button=next_button: self.button_callback(interaction, button)
 
             row2 = ui.ActionRow()
-            if self.player.position and self.player.position >= 20000:
+            if self.player.is_playing and self.player.current.duration and self.player.current.duration > 20000:
                 back_time = ui.Button(label="<< 20s", style=discord.ButtonStyle.secondary, emoji="⏪", custom_id="back_time", row=1)
             else:
                 back_time = ui.Button(label="<< 20s", style=discord.ButtonStyle.secondary, emoji="⏪", custom_id="back_time", row=1, disabled=True)
             row2.add_item(back_time)
             back_time.callback = lambda interaction=self.ctx, button=back_time: self.button_callback(interaction, button)
 
-            if self.player.playing:
+            if self.player.is_playing:
                 pause_button = ui.Button(label="Pause", style=discord.ButtonStyle.secondary, emoji="⏯", custom_id="pause_resume", row=1)
             else:
                 pause_button = ui.Button(label="Resume", style=discord.ButtonStyle.secondary, emoji="⏯", custom_id="pause_resume", row=1)
             row2.add_item(pause_button)
             pause_button.callback = lambda interaction=self.ctx, button=pause_button: self.button_callback(interaction, button)
 
-            if self.player.current is not None and self.player.current.length and self.player.current.length - self.player.position >= 20000:
+            if self.player.is_playing and self.player.current.duration and self.player.current.duration - self.player.position >= 20000:
                 forward_time = ui.Button(label="20s >>", style=discord.ButtonStyle.secondary, emoji="⏩", custom_id="forward_time", row=1)
             else:
                 forward_time = ui.Button(label="20s >>", style=discord.ButtonStyle.secondary, emoji="⏩", custom_id="forward_time", row=1, disabled=True)
@@ -299,14 +415,15 @@ class MusicMessageView(ui.LayoutView):
         try: await interaction.response.defer()
         except: pass
         if button.custom_id == "pause_resume":
-            if self.player.paused:
-                await self.player.pause(False)
-                button.label = "Pause"
-                button.style = discord.ButtonStyle.secondary
-            else:
-                await self.player.pause(True)
+            if self.player.is_playing:
+                await self.player.set_pause(True)
                 button.label = "Resume"
                 button.style = discord.ButtonStyle.success
+            else:
+                await self.player.set_pause(False)
+                button.label = "Pause"
+                print("resuming")
+                button.style = discord.ButtonStyle.secondary
             try:
                 await interaction.edit_original_response(view=self)
             except discord.errors.NotFound:
@@ -315,8 +432,8 @@ class MusicMessageView(ui.LayoutView):
             new_position = max(0, self.player.position - 20000)
             await self.player.seek(new_position)
         elif button.custom_id == "forward_time":
-            if self.player.current.length:
-                new_position = min(self.player.current.length, self.player.position + 20000)
+            if self.player.current.duration:
+                new_position = min(self.player.current.duration, self.player.position + 20000)
                 await self.player.seek(new_position)
         elif button.custom_id == "mlist":
             await command_counter(user_id=str(interaction.user.id), bot=self.bot)
@@ -335,11 +452,11 @@ class MusicMessageView(ui.LayoutView):
         elif button.custom_id == "skip":
             track = self.player.current
             self.player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
-            await self.player.skip(force=True)
+            await self.player.skip()
             if track is not None:
                 if self.player.guild.id in self.bot.server_music_session:
                     self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
-                data = dict(track.extras)
+                data = dict(track.extra)
                 try:
                     embed = create_embed(title="Musique", description=f"La musique `{data['name']}` (**{data['pos']}**) a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
                 except KeyError: # this is from autoplay
@@ -352,8 +469,9 @@ class MusicMessageView(ui.LayoutView):
                     await storeSkippedSong(pool=self.bot.pool, songname=track.title, userid=str(interaction.user.id))
                     return 
         elif button.custom_id == "disconnect":
-            await self.player.disconnect()
             self.player.queue.clear()
+            await self.player.stop()
+            await self.ctx.voice_client.disconnect(force=True)
             try:
                 if interaction.guild.id in self.bot.ui_V2:
                     await self.bot.ui_V2[interaction.guild.id].stop()
@@ -370,7 +488,7 @@ class MusicMessageView(ui.LayoutView):
             if self.player.guild.id in self.bot.server_music_session:
                 self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
         elif button.custom_id == "like":
-            songData = VideoDB.from_row(self.player.current.extras)
+            songData = VideoDB.from_row(self.player.current.extra)
             async with self.bot.pool.acquire() as conn:
                 async with conn.transaction():
                     result = await conn.fetchall("SELECT songId FROM LikedSongsV2 WHERE userId = ?", (str(interaction.user.id),))
@@ -387,21 +505,20 @@ class MusicMessageView(ui.LayoutView):
         elif button.custom_id == "prev":
             pass
         elif button.custom_id == "autoplay":
-            if self.player.autoplay.name == "enabled":
-                self.player.autoplay = AutoPlayMode.disabled
-                self.sb_btn.label = "AutoPlay Off"
-                texte = f"AutoPlay est maintenant désactivé uniquement les musiques de la queue seront jouées !"
-                self.sb_btn.style = discord.ButtonStyle.red
-            else:
-                self.player.autoplay = AutoPlayMode.enabled
-                self.sb_btn.label = "AutoPlay On"
-                texte = f"AutoPlay est maintenant activé selon les recommandations Youtube !"
-                self.sb_btn.style = discord.ButtonStyle.green
+            current = getattr(self.bot, 'autoplay_enabled', {}).get(interaction.guild.id, True)
+            new_value = not current
+            self.bot.autoplay_enabled[interaction.guild.id] = new_value
+
+            button.label = f"AutoPlay: {'ON' if new_value else 'OFF'}"
+            button.style = discord.ButtonStyle.success if new_value else discord.ButtonStyle.secondary
+            button.emoji = "🎲" if new_value else "⛔"
+
+            embed = create_embed(title="Musique", description=f"AutoPlay est maintenant **{'activé' if new_value else 'désactivé'}**.")
             try:
-                await interaction.channel.send(embed=create_embed(title="Musique", description=texte))
                 await interaction.edit_original_response(view=self)
             except discord.errors.NotFound:
-                return await interaction.followup.send(view=self)
+                await interaction.followup.send(view=self)
+            await interaction.followup.send(embed=embed)
         return
     
     async def on_timeout(self):
@@ -978,9 +1095,9 @@ class EndSessionBtn(discord.ui.View):
             out = []
             mlist_handler = MusicList_Handler(bot=self.bot)
             try:
-                vc: wavelink.Player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+                vc = await interaction.user.voice.channel.connect(cls=LavalinkVoiceClient)
             except discord.errors.ClientException:
-                vc: wavelink.Player = interaction.guild.voice_client
+                vc = interaction.guild.voice_client
             async with self.bot.pool.acquire() as conn:
                 data = await conn.fetchall(f"SELECT name FROM {music_table}")
                 for d in data:
@@ -988,17 +1105,19 @@ class EndSessionBtn(discord.ui.View):
             zic_chann = discord.utils.get(interaction.guild.channels, name="musique", type=discord.ChannelType.text)
             tracks = []
             for track in out:
-                _track: wavelink.Search = await wavelink.Playable.search(f"{MUSICS_FOLDER}{track}.mp3", source=None)
-                if len(_track) > 0:
+                results = await interaction.bot.lavalink.get_tracks(f"{MUSICS_FOLDER}{track}.mp3")
+                if results.tracks:
                     index, downloader = await mlist_handler.get_index_by_music_name(track)
                     duration = await mlist_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": track, "_duration": duration, "_txt_chann": zic_chann.id}
-                    tracks.append(_track[0])
+                    results.tracks[0].extra = {"downloader": downloader, "pos": index, "name": track, "duree": duration, "txt_channel_id": zic_chann.id}
+                    tracks.append(results.tracks[0])
             random.shuffle(tracks)
-            await vc.queue.put_wait(tracks)
+            player = interaction.bot.lavalink.player_manager.get(interaction.guild.id)
+            for track in tracks:
+                player.add(track)
             try:
-                if not vc.playing:
-                    await vc.play(vc.queue.get(), volume=100)
+                if not player.is_playing:
+                    await player.play()
             except Exception as e:
                 print(e)
             embed = create_embed(title="Musique", description=f"Toutes les musiques (**{len(tracks)}**) ont été ajoutées à la queue en mode aléatoire par <@{interaction.user.id}> !")
@@ -1033,25 +1152,27 @@ class EndSessionBtn(discord.ui.View):
             zic_chann = discord.utils.get(interaction.guild.channels, name="musique", type=discord.ChannelType.text)
             for d in data:
                 id, userId, songName = d
-                _track = await wavelink.Playable.search(f"{MUSICS_FOLDER}{songName}.mp3", source=None)
-                if len(_track) > 0:
+                results = await interaction.bot.lavalink.get_tracks(f"{MUSICS_FOLDER}{songName}.mp3")
+                if results.tracks:
                     index, downloader = await mlist_handler.get_index_by_music_name(songName)
                     duration = await mlist_handler.get_song_duration_by_index(str(index))
-                    _track[0].extras = {"_downloader": downloader, "_index": index, "_name": songName, "_duration": duration, "_txt_chann": zic_chann.id}
-                    music_list.append(_track[0])
+                    results.tracks[0].extra = {"downloader": downloader, "pos": index, "name": songName, "duree": duration, "txt_channel_id": zic_chann.id}
+                    music_list.append(results.tracks[0])
         random.shuffle(music_list)
         
         try:
-            vc: wavelink.Player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+            vc = await interaction.user.voice.channel.connect(cls=LavalinkVoiceClient)
         except discord.errors.ClientException:
-            vc: wavelink.Player = interaction.guild.voice_client
+            vc = interaction.guild.voice_client
 
-        await vc.queue.put_wait(music_list)
+        player = interaction.bot.lavalink.player_manager.get(interaction.guild.id)
+        for track in music_list:
+            player.add(track)
         embed = create_embed(title="Musique", description=f"`{len(music_list)} musique` ajouté à la queue. (titres likés de {user.display_name})", suggestions=["queue","mlist","playlist-play"])
         await interaction.followup.send(embed=embed)
         try:
-            if not vc.playing:
-                await vc.play(vc.queue.get(), volume=100)
+            if not player.is_playing:
+                await player.play()
         except Exception as e:
             pass
         return 
@@ -1348,20 +1469,20 @@ class DropDown(discord.ui.Select):
                     embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
                     return await interaction.channel.send(embed=embed)
                 try:
-                    vc: wavelink.Player = (self.ctx.voice_client or await self.ctx.author.voice.channel.connect(cls=wavelink.Player))
-                    _track = await wavelink.Playable.search(f"https://youtube.com/watch?v={video_id}")
-                    if len(_track) > 0:
+                    vc = (self.ctx.voice_client or await self.ctx.author.voice.channel.connect(cls=LavalinkVoiceClient))
+                    results = await self.ctx.bot.lavalink.get_tracks(f"https://youtube.com/watch?v={video_id}")
+                    if results.tracks:
                         _r = video.to_dict()
                         _r['txt_channel_id'] = zic_chann.id
-                        _track[0].extras = _r
-                        await vc.queue.put_wait([_track[0]])
-                        if not vc.playing:
-                            await vc.play(vc.queue.get(), volume=100)
+                        results.tracks[0].extra = _r
+                        player = self.ctx.bot.lavalink.player_manager.get(self.ctx.guild.id)
+                        player.add(results.tracks[0])
+                        if not player.is_playing:
+                            await player.play()
                         embed = create_embed(title="Musique", description=f"La musique `{video.name}` (N°{video.pos}) a été ajoutée à la queue par <@{interaction.user.id}> ! 🦈", suggestions=["queue","mlist","playlist-play"])
                         await response.edit(embed=embed)
                         try: await interaction.delete_original_response()
-                        except discord.errors.NotFound: pass
-                        return 
+                        except: pass
                 except Exception as e:
                     LogErrorInWebhook()
             return await response.edit(embed=create_embed("Musique",f"La musique `{video.name}` (N°{video.pos}) a été téléchargée avec succès ! 🦈"))
@@ -1793,79 +1914,107 @@ class Music(commands.Cog):
         self.bot = bot
         self.music_list_handler = MusicList_Handler(bot=self.bot)
         self.music_session = {}
-    
-    # Wavelink events
-    @commands.Cog.listener()
-    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
-        player: wavelink.Player | None = payload.player
-        if not player:
-            print("[I] player was none.")
+
+        self._register_lavalink_hook()
+
+        if not hasattr(self.bot, 'autoplay_history'):
+            self.bot.autoplay_history = {}
+        if not hasattr(self.bot, 'autoplay_locks'):
+            self.bot.autoplay_locks = {}
+        if not hasattr(self.bot, 'autoplay_enabled'):
+            self.bot.autoplay_enabled = {}
+        if not hasattr(self.bot, 'autoplay_suggestions'):
+            self.bot.autoplay_suggestions = {}
+
+    def _register_lavalink_hook(self):
+        if not hasattr(self.bot, 'lavalink'):
             return
-        track: wavelink.Playable = payload.track
-        c_auto_queue = []
-        guild_id = player.guild.id
-        data = dict(track.extras)
-        if data:
-            try:
-                music_task = ServerUI(bot=self.bot, player=player, downloader_id=data['downloader'], track_name=data['name'], track_index=data['pos'], track_duration=data['duree'], txt_channel_id=data['txt_channel_id'], auto_queue=c_auto_queue)
+        if getattr(self.bot, '_music_lavalink_hook_registered', False):
+            return
+        self.bot.lavalink.add_event_hook(self._lavalink_event_hook)
+        self.bot._music_lavalink_hook_registered = True
+
+    async def cog_load(self):
+        self._register_lavalink_hook()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        self._register_lavalink_hook()
+
+    async def _lavalink_event_hook(self, event):
+        if isinstance(event, lavalink.TrackStartEvent):
+            return await self.on_track_start(event)
+        if isinstance(event, lavalink.TrackEndEvent):
+            return await self.on_track_end(event)
+        if isinstance(event, lavalink.TrackExceptionEvent):
+            return await self.on_track_exception(event)
+        return
+    
+    # Lavalink.py events
+    @lavalink.listener(lavalink.TrackStartEvent)
+    async def on_track_start(self, event: lavalink.TrackStartEvent):
+        try:
+            print(f"[I] on_track_start: {event.track}")
+            player = event.player
+            if not player:
+                print("[I] player was none.")
+                return
+            track = event.track
+            guild_id = player.guild_id
+            c_auto_queue = getattr(self.bot, 'autoplay_suggestions', {}).get(guild_id, [])
+            data = dict(track.extra) if track.extra else {}
+            if data:
+                downloader_id = data.get('downloader', data.get('_downloader'))
+                track_name = data.get('name', data.get('_name', getattr(track, 'title', None)))
+                track_index = data.get('pos', data.get('_index'))
+                track_duration = data.get('duree', data.get('_duration', getattr(track, 'length', None)))
+                txt_channel_id = data.get('txt_channel_id', data.get('_txt_chann', data.get('_txt_channel_id')))
+
+                if txt_channel_id is None:
+                    print(f"[I] ServerUI missing txt_channel_id. track={getattr(track, 'title', track)} extra_keys={list(data.keys())}")
+
+                music_task = ServerUI(bot=self.bot, player=player, downloader_id=downloader_id, track_name=track_name, track_index=track_index, track_duration=track_duration, txt_channel_id=txt_channel_id, auto_queue=c_auto_queue)
                 music_task.task = asyncio.create_task(music_task.start())
                 self.bot.ui_V2[guild_id] = music_task
-            except Exception as e:
-                print(e)
-                LogErrorInWebhook()
-                pass
-        else:
-            try:
+            else:
                 result = await download(pool=self.bot.pool, session=self.bot.session, video_id=track.identifier, downloader=1065781211219370104, is_autoplay=True)
                 if isinstance(result, VideoDB):
                     music_task = ServerUI(bot=self.bot, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=None, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result, auto_queue=c_auto_queue)
                     music_task.task = asyncio.create_task(music_task.start())
                     self.bot.ui_V2[guild_id] = music_task
 
-                    # download auto_queue
-                    if player.autoplay == wavelink.AutoPlayMode.enabled and player.auto_queue and len(player.auto_queue) >= 3:
-                        for i in range(3):
-                            track = player.auto_queue[i]
-                            try:
-                                downloader_id = 1065781211219370104  # Default Trapard ID for autoplay
-                                result = await download(pool=self.bot.pool, session=self.bot.session, video_id=track.identifier, downloader=downloader_id, is_autoplay=True)
-                                if isinstance(result, VideoDB):
-                                    c_auto_queue.append(result)
-                            except Exception as e:
-                                LogErrorInWebhook() 
-                        music_task.auto_queue = c_auto_queue
                 else:
                     LogErrorInWebhook(f"[I] track is from autoplay and his id is: {track.identifier} but result was not a VideoDB, result: {result}")
-
-            except Exception as e:
-                print("x0585", e)
-                traceback.print_exc()
-
-    @commands.Cog.listener()
-    async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
-        player: wavelink.Player | None = payload.player
+        except Exception as e:
+            print(e)
+            LogErrorInWebhook()
+            pass
+    @lavalink.listener(lavalink.TrackEndEvent)
+    async def on_track_end(self, event: lavalink.TrackEndEvent):
+        player = event.player
         if not player:
             return
-        guild_id = player.guild.id
+        guild_id = player.guild_id
 
         if hasattr(player, "_skip_by_command") and player._skip_by_command:
             print("[I] Skipped by command, not processing end event.")
             player._skip_by_command = False
             if guild_id in self.bot.ui_V2:
                 await self.bot.ui_V2[guild_id].stop()
-            if len(player.queue) > 0 and len(player.channel.members) > 1:
-                next_track: wavelink.Playable = player.queue.get()
-                await player.play(next_track)
+            chann = self.bot.get_channel(player.channel_id)
+            if len(player.queue) > 0 and chann and len(chann.members) > 1:
+                await player.play()
             return
 
-        track: wavelink.Playable = payload.track
-        data = dict(track.extras)
-        if len(player.channel.members) == 1:
+        track = event.track
+        data = dict(track.extra) if track.extra else {}
+        chann = self.bot.get_channel(player.channel_id)
+        if chann and len(chann.members) == 1:
             try:
-                await player.disconnect()
+                await player.stop()
                 played_time = format_duration(str(self.bot.server_music_session[guild_id]['time']))
                 embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[guild_id]['nb']} musiques, pour une durée de **{played_time}**!")
-                self.bot.server_music_session[player.guild.id] = {'nb': 0, 'time': 0}
+                self.bot.server_music_session[player.guild_id] = {'nb': 0, 'time': 0}
                 zic_chann = discord.utils.get(player.guild.channels, name="musique", type=discord.ChannelType.text)
                 if zic_chann is not None:
                     view = EndSessionBtn(bot=self)
@@ -1873,32 +2022,138 @@ class Music(commands.Cog):
             except Exception as e:
                 print("X01:", e)
         if data:
-            self.bot.last_music[guild_id] = data['name']
+            last_name = data.get('name', data.get('_name', None))
+            if last_name is not None:
+                self.bot.last_music[guild_id] = last_name
         try:
             if guild_id in self.bot.ui_V2:
                 await self.bot.ui_V2[guild_id].stop()
-                print(f"STOPPED UI for guild {guild_id} and track {data['name'] if data else 'unknown'}")
+                print(f"STOPPED UI for guild {guild_id} and track {data.get('name', data.get('_name', 'unknown')) if data else 'unknown'}")
         except Exception as e:
             print("X0254:", e)
             traceback.print_exc()
-        if len(player.queue) > 0 and len(player.channel.members) > 1:
-            next_track: wavelink.Playable = player.queue.get()
-            return await player.play(next_track)
+        chann = self.bot.get_channel(player.channel_id)
+        if chann and len(chann.members) <= 1:
+            return
+
+        if len(player.queue) > 0:
+            await player.play()
+            return
+
+        await self._maybe_autoplay(player=player, last_track=track, last_data=data)
         return
 
-    @commands.Cog.listener()
-    async def on_wavelink_track_exception(self,payload: wavelink.TrackExceptionEventPayload):
+    async def _maybe_autoplay(self, *, player, last_track: lavalink.AudioTrack, last_data: dict):
         try:
-            if payload.player.guild.id in self.bot.ui_V2:
-                await self.ui_V2[payload.player.guild.id].stop()
-                self.bot.ui_V2[payload.player.guild.id].task.cancel()
+            guild_id = player.guild_id
+
+            if not getattr(self.bot, 'autoplay_enabled', {}).get(guild_id, True):
+                return
+
+            lock = self.bot.autoplay_locks.get(guild_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self.bot.autoplay_locks[guild_id] = lock
+
+            async with lock:
+                chann = self.bot.get_channel(player.channel_id)
+                if len(player.queue) > 0 or not chann or len(chann.members) <= 1:
+                    return
+
+                history = self.bot.autoplay_history.get(guild_id)
+                if history is None:
+                    history = []
+                    self.bot.autoplay_history[guild_id] = history
+
+                base_title = last_data.get('name') or last_data.get('_name') or getattr(last_track, 'title', None)
+                if not base_title:
+                    return
+
+                search_query = f"ytsearch:{base_title}"
+                results = await self.bot.lavalink.get_tracks(search_query)
+                if not results or not getattr(results, 'tracks', None):
+                    return
+
+                last_identifier = getattr(last_track, 'identifier', None)
+                chosen = None
+                for t in results.tracks:
+                    ident = getattr(t, 'identifier', None)
+                    if ident and ident == last_identifier:
+                        continue
+                    if ident and ident in history:
+                        continue
+                    chosen = t
+                    break
+
+                if chosen is None:
+                    return
+
+                suggestions: List[VideoDB] = []
+                try:
+                    max_suggestions = 3
+                    for t in results.tracks:
+                        if len(suggestions) >= max_suggestions:
+                            break
+                        ident = getattr(t, 'identifier', None)
+                        if not ident or ident == last_identifier:
+                            continue
+                        if ident == getattr(chosen, 'identifier', None):
+                            continue
+                        if ident in history:
+                            continue
+                        try:
+                            resolved_sug = await download(pool=self.bot.pool, session=self.bot.session, video_id=ident, downloader=1065781211219370104, is_autoplay=True)
+                            if isinstance(resolved_sug, VideoDB):
+                                suggestions.append(resolved_sug)
+                        except Exception:
+                            continue
+                finally:
+                    self.bot.autoplay_suggestions[guild_id] = suggestions
+
+                txt_channel_id = last_data.get('txt_channel_id', last_data.get('_txt_chann', last_data.get('_txt_channel_id')))
+                resolved = None
+                try:
+                    chosen_ident = getattr(chosen, 'identifier', None)
+                    if chosen_ident:
+                        resolved = await download(pool=self.bot.pool, session=self.bot.session, video_id=chosen_ident, downloader=1065781211219370104, is_autoplay=True)
+                except Exception:
+                    resolved = None
+
+                if isinstance(resolved, VideoDB):
+                    chosen.extra = resolved.to_dict()
+                    chosen.extra['txt_channel_id'] = txt_channel_id
+                    chosen.extra['autoplay'] = True
+                else:
+                    chosen.extra = {
+                        'txt_channel_id': txt_channel_id,
+                        'autoplay': True,
+                    }
+                ident = getattr(chosen, 'identifier', None)
+                if ident:
+                    history.append(ident)
+                    if len(history) > 25:
+                        del history[:-25]
+
+                player.add(chosen)
+                if not player.is_playing:
+                    await player.play()
+        except Exception as e:
+            print("[I] autoplay error:", e)
+            LogErrorInWebhook()
+
+    @lavalink.listener(lavalink.TrackExceptionEvent)
+    async def on_track_exception(self, event: lavalink.TrackExceptionEvent):
+        try:
+            if event.player.guild_id in self.bot.ui_V2:
+                await self.bot.ui_V2[event.player.guild_id].stop()
+                self.bot.ui_V2[event.player.guild_id].task.cancel()
         except Exception as e:
             print("X03:", e)
         try:
-            print("[P] Possible corrupted file:", payload.track.extras.name, payload.exception)
+            print("[P] Possible corrupted file:", event.track.extra, event.exception)
         except:
-            print("[P] Possible corrupted file1:", payload.track.title, payload.exception)
-        LogErrorInWebhook(f"Music {payload.track.title} has crashed.\n{payload.exception}")
+            print("[P] Possible corrupted file1:", event.track.title, event.exception)
+        LogErrorInWebhook(f"Music {event.track.title} has crashed.\n{event.exception}")
 
     async def handler_music_input(self, index: str, musique_name:str, channel_name:str, author_voice: bool, author_id:int):
         if musique_name is not None:
@@ -1980,26 +2235,29 @@ class Music(commands.Cog):
             embed = create_embed(title="Erreur", description="Vous n'êtes pas dans un channel vocal, **BUICON**.", suggestions=["queue","mlist","playlist-play"])
             return await ctx.send(embed=embed)
         async with self.bot.pool.acquire() as conn:
-            data = await conn.fetchall("SELECT songId FROM LikedSongsV2 WHERE userId = ?", (str(user.id),))
+            data = await conn.fetchall("SELECT * FROM LikedSongs WHERE userId = ?", (str(user.id),))
         if len(data) == 0:
             embed = create_embed(title="Erreur", description=f"<@{user.id}> n'a pas de musiques likés.")
             return await ctx.send(embed=embed, ephemeral=True)
         else:
-            vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+            vc = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=LavalinkVoiceClient))
             zic_chann = discord.utils.get(ctx.guild.channels, name="musique", type=discord.ChannelType.text)
             music_list = []
             random.shuffle(data)
             for _i, track in enumerate(data):
                 songId = ast.literal_eval(track[0])[1]
                 video = await get_Video_from_input(songId, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
-                _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={songId}")
-                if len(_track) > 0:
+                results = await ctx.bot.lavalink.get_tracks(f"https://www.youtube.com/watch?v={songId}")
+                if results.tracks:
                     _r = video.to_dict()
                     _r['txt_channel_id'] = ctx.channel.id
-                    _track[0].extras = _r
-                    await vc.queue.put_wait([_track[0]])
-                if _i == 0 and not vc.playing:
-                    await vc.play(vc.queue.get(), volume=100)
+                    results.tracks[0].extra = _r
+                    player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                    player.add(results.tracks[0])
+                    if _i == 0 and not player.is_playing:
+                        await player.play()
+                if _i == 0:
+                    pass
         try:
             await ctx.message.add_reaction("\u2705")
         except discord.errors.NotFound:
@@ -2084,20 +2342,20 @@ class Music(commands.Cog):
                 return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
             if position is not None and (position < 1 or position > 5):
                 return await ctx.send(embed=create_embed(title="Erreur", description="La position doit être entre 1 et 5."))
-            player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+            player = self.bot.lavalink.player_manager.get(ctx.guild.id)
             if not player:
                 return
-            if player.current is not None:
-                current_data = dict(player.current.extras)
+            if player.is_playing:
+                current_data = dict(player.current.extra)
                 if current_data:
                     if position is None:
                         cur_track = f"`{current_data['name']}` (**{current_data['pos']}**) a été passé par "
                         name = current_data['name']
                         player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
-                        await player.skip(force=True)
+                        await player.skip()
                     else:
-                        next_track = player.queue.get_at(position - 1)
-                        next_track_data = dict(next_track.extras)
+                        next_track = player.queue[position - 1]
+                        next_track_data = dict(next_track.extra)
                         name = next_track_data['name']
                         cur_track = f"`{next_track_data['name']}` (**{next_track_data['pos']}**) a été retiré de la queue par "
                     await storeSkippedSong(pool=self.bot.pool, songname=name, userid=str(ctx.author.id))
@@ -2105,7 +2363,7 @@ class Music(commands.Cog):
                     cur_track = f"`{player.current}` (**autoplay**) a été passé par "
                     name = None
                     player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
-                    await player.skip(force=True)
+                    await player.skip()
             else:
                 embed = create_embed(title="Erreur", description="Il n'y a pas de musique en cours de lecture.")
                 return await ctx.send(embed=embed)
@@ -2131,7 +2389,7 @@ class Music(commands.Cog):
         """Déconnecter le bot du salon vocal et reset la queue."""
         try:
             await command_counter(user_id=str(ctx.author.id), bot=self.bot)
-            player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+            player = self.bot.lavalink.player_manager.get(ctx.guild.id)
             if not player:
                 embed = create_embed(title="Erreur", description="Trapard est dans aucun vocal, tu es one head ou quoi ?")
                 return await ctx.send(embed=embed)
@@ -2148,8 +2406,9 @@ class Music(commands.Cog):
                 embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[ctx.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
                 self.bot.server_music_session[ctx.guild.id] = {'nb': 0, 'time': 0}
             else: embed = create_embed(title="Musique", description="Trapard déconnecté du vocal par <@" + str(ctx.author.id) + ">.")
-
-            await player.disconnect()
+            player.queue.clear()
+            await player.stop()
+            await ctx.voice_client.disconnect(force=True)
             try:
                 await ctx.message.add_reaction("\u2705")
             except discord.errors.NotFound:
@@ -2211,6 +2470,7 @@ class Music(commands.Cog):
             return liste
         except Exception as e:
             LogErrorInWebhook()
+
 #End music controler
     
     @commands.hybrid_command(name='is-song', aliases=["find"])
@@ -2339,7 +2599,7 @@ class Music(commands.Cog):
             musicList = getMusicList(playlistname)
             if musicList is None:
                 return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)
-            vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+            vc = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=LavalinkVoiceClient))
             if melange:
                 embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue en aléatoire !")
                 random.shuffle(musicList)
@@ -2347,19 +2607,21 @@ class Music(commands.Cog):
                 embed = create_embed(title="Musique", description=f"La playlist `{playlistname}` a été ajouté à la queue dans l'ordre !")
             tracks = []
             for music in musicList:
-                _track = await wavelink.Playable.search(f"{MUSICS_FOLDER}{music}.mp3", source=None)
-                if len(_track) == 0:
+                results = await ctx.bot.lavalink.get_tracks(f"{MUSICS_FOLDER}{music}.mp3")
+                if not results.tracks:
                     continue
                 index, downloader = await mlist_handler.get_index_by_music_name(music)
                 duration = await mlist_handler.get_song_duration_by_index(str(index))
-                _track[0].extras = {"_downloader": downloader, "_index": index, "_name": music, "_duration": duration, "_txt_chann": ctx.channel.id}
-                tracks.append(_track[0])
+                results.tracks[0].extra = {"downloader": downloader, "pos": index, "name": music, "duree": duration, "txt_channel_id": ctx.channel.id}
+                tracks.append(results.tracks[0])
             if len(tracks) == 0:
                 return await ctx.send(f"La playlist : `{playlistname}` ne semble pas exister !", ephemeral=True)
-            await vc.queue.put_wait(tracks)
+            player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+            for track in tracks:
+                player.add(track)
             try:
-                if not vc.playing:
-                    await vc.play(vc.queue.get(), volume=100)
+                if not player.is_playing:
+                    await player.play()
             except Exception as e:
                 print(e)
             return await ctx.send(embed=embed)
@@ -2735,12 +2997,12 @@ class Music(commands.Cog):
             if musique_name is not None:
                 video_id = musique_name
             else:
-                vc: wavelink.Player = ctx.voice_client
-                if vc is None:
+                player = self.bot.lavalink.player_manager.get(ctx.guild.id)
+                if player is None:
                     return await ctx.send("Trapard n'est pas dans le vocal.", ephemeral=True)
-                if vc.current is None:
+                if player.current is None:
                     return await ctx.send("Trapard n'a pas de musique en cours.", ephemeral=True)
-                data = dict(vc.current.extras)
+                data = dict(player.current.extra)
                 video_id = data["_downloader"]
             thumb = await get_thumb(session=self.bot.session, video_id=video_id)
             embed = create_embed(title="Fix-thumb", description=f"La miniature de la musique `{video_id}` a bien été rechargée.")
@@ -2765,7 +3027,7 @@ class Music(commands.Cog):
     @commands.command(aliases=["vol"])
     async def volume(self, ctx: commands.Context, value: int) -> None:
         """Change the volume of the player."""
-        player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+        player = self.bot.lavalink.player_manager.get(ctx.guild.id)
         if value > 300 and ctx.author.id != 311013099719360512:
             return await ctx.send(embed=create_embed(title="Volume", description="Le volume ne peut pas être supérieur à 300."))
         if not player:
@@ -2776,15 +3038,13 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="autoplay", aliases=["ap"])
     async def autoplay(self, ctx: commands.Context, value: bool) -> None:
         """Change the autoplay of the player."""
-        player: wavelink.Player = cast(wavelink.Player, ctx.voice_client)
+        player = self.bot.lavalink.player_manager.get(ctx.guild.id)
         if not player:
             return
         if value:
             await ctx.send(embed=create_embed(title="Autoplay", description="L'autoplay a été activé."))
-            player.autoplay = AutoPlayMode.enabled
         else:
             await ctx.send(embed=create_embed(title="Autoplay", description="L'autoplay a été désactivé."))
-            player.autoplay = AutoPlayMode.disabled
         await ctx.message.add_reaction("\u2705")
 
 async def handle_sb(ctx: commands.Context, bot, userId: int=None):
@@ -2826,7 +3086,7 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
         await command_counter(user_id=str(ctx.author.id), bot=ctx.bot)
         if ctx.channel.name != "musique": return await ctx.send(embed=create_embed(title="Erreur", description="Merci d'utiliser un channel nommé: **musique**, pour jouer de la musique."), ephemeral=True)
         
-        try: vc: wavelink.Player = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=wavelink.Player))
+        try: vc = (ctx.voice_client or await ctx.author.voice.channel.connect(cls=LavalinkVoiceClient))
         except AttributeError: return await ctx.send(embed=create_embed(title="Erreur", description="Tu n'es pas dans un channel vocal..."), ephemeral=True)
         
         try: await ctx.defer()
@@ -2838,28 +3098,33 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
         if (_type == "next") or (_type == "music"):
             if from_mlist is not None:
                 from_web = from_mlist
-            vc.autoplay = wavelink.AutoPlayMode.enabled
+            # Note: lavalink.py doesn't have autoplay mode, this would need custom implementation
             video = await get_Video_from_input(from_web, ctx.author.id, ctx.bot.pool, ctx.bot.session, ctx=ctx)
             if isinstance(video, discord.ui.View): # Prompted user to choose a video
                 await sleep(120)
-                if not vc.playing: # User didn't choose a video in time, disconnecting from vocal
-                    await vc.disconnect()
-                    await ctx.send(embed=create_embed(title="Musique", description="Aucune musique n'a été choisie, je me déconnecte du vocal."), ephemeral=True)
+                player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                if player is not None:
+                    if not player.is_playing: # User didn't choose a video in time, disconnecting from vocal
+                        await vc.disconnect()
+                        await ctx.send(embed=create_embed(title="Musique", description="Aucune musique n'a été choisie, je me déconnecte du vocal."), ephemeral=True)
                 return
-            _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
-            if len(_track) > 0:
+            results = await ctx.bot.lavalink.get_tracks(f"https://www.youtube.com/watch?v={video.video_id}")
+            if results.tracks:
                 try:
                     _r = video.to_dict()
                     _r['txt_channel_id'] = ctx.channel.id
-                    _track[0].extras = _r
+                    results.tracks[0].extra = _r
                     if _type == "next":
-                        vc.queue.put_at(0, _track[0])
+                        player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                        player.add(results.tracks[0], index=0)
                     else:
-                        await vc.queue.put_wait([_track[0]])
+                        player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                        player.add(results.tracks[0])
                 except Exception as e:
                     print(e)
-            if not vc.playing:
-                await vc.play(vc.queue.get(), volume=100)
+            player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+            if not player.is_playing:
+                await player.play()
         elif _type == "random":
             if random_nb > 50:
                 return await ctx.reply(embed=create_embed(title="Erreur", description="Le nombre de musiques aléatoires ne peut pas être supérieur à 50."))
@@ -2868,15 +3133,18 @@ async def handle_play(ctx: commands.Context, _type: Literal['next', 'music', 'al
             for i, track in enumerate(data):
                 video = VideoDB.from_row(track)
                 try:
-                    _track: wavelink.Search = await wavelink.Playable.search(f"https://www.youtube.com/watch?v={video.video_id}")
-                    if len(_track) > 0:
+                    results = await ctx.bot.lavalink.get_tracks(f"https://www.youtube.com/watch?v={video.video_id}")
+                    if results.tracks:
                         _r = video.to_dict()
                         _r['txt_channel_id'] = ctx.channel.id
-                        _track[0].extras = _r
-                        await vc.queue.put_wait([_track[0]])
+                        results.tracks[0].extra = _r
+                        player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                        player.add(results.tracks[0])
                         print(f"Added to queue {video.name}")
-                    if i == 0 and not vc.playing:
-                        await vc.play(vc.queue.get(), volume=100)
+                    if i == 0:
+                        player = ctx.bot.lavalink.player_manager.get(ctx.guild.id)
+                        if not player.is_playing:
+                            await player.play()
                 except Exception as e:
                     LogErrorInWebhook(f"Can't search {video.video_id} ({video.name}) in random")
                     traceback.print_exc()

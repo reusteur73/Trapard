@@ -13,7 +13,7 @@ from Cogs.utils.data import FULL_EMOJIS_LIST
 from Cogs.utils.functions import LogErrorInWebhook, create_embed, convert_txt_to_colored, format_duration, command_counter, write_item, load_json_data, afficher_nombre_fr, probability_1_percent, probability_7_percent, addMemory, getUserById, is_url, calculate_coins, calculate_coins2, check_how_many_played, str_to_list, check_how_many_played2, print_grid, main_sudoku, verifier_grille_sudoku, getVar, calc_usr_gain_by_tier
 from Cogs.utils.path import DB_PATH, DB_PATH_2
 from asyncio import sleep
-import asyncio, openai, wavelink, time # type: ignore
+import asyncio, openai, lavalink, time # type: ignore
 
 if TYPE_CHECKING:
     from .bot import Trapard
@@ -96,8 +96,16 @@ class Trapard(commands.Bot):
             await conn.execute("PRAGMA synchronous=NORMAL;")
             await conn.execute("PRAGMA busy_timeout = 5000;")
 
-        nodes = [wavelink.Node(uri="http://127.0.0.1:2333", password=getVar("LAVALINK_PWD"))]
-        await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=None)
+        # Set up lavalink client
+        if not hasattr(self, 'lavalink'):
+            self.lavalink = lavalink.Client(self.user.id)
+            self.lavalink.add_node(
+                host='127.0.0.1',
+                port=2333,
+                password=getVar("LAVALINK_PWD"),
+                region='au',
+                name='default-node'
+            )
         # setting music values
         self.music_queues = {}
         self.current_track = {}
@@ -168,6 +176,22 @@ class Trapard(commands.Bot):
                 log.exception('Failed to load extension %s.', extension)
                 if DEBUG:
                     print(f'Failed to load extension {extension}.\n{e}')
+
+    async def on_voice_server_update(self, data):
+        """Voice server update handler for lavalink.py"""
+        lavalink_data = {
+            't': 'VOICE_SERVER_UPDATE',
+            'd': data
+        }
+        await self.lavalink.voice_update_handler(lavalink_data)
+
+    async def on_voice_state_update(self, data):
+        """Voice state update handler for lavalink.py"""
+        lavalink_data = {
+            't': 'VOICE_STATE_UPDATE',
+            'd': data
+        }
+        await self.lavalink.voice_update_handler(lavalink_data)
 
     @property
     def owner(self) -> discord.User:
