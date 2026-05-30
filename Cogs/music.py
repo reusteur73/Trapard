@@ -1,16 +1,16 @@
 from typing import Literal, List, Tuple, cast, Optional
-from discord.ext import commands
+from discord.ext import commands #type: ignore
 from .utils.classes import VideoDB
 from youtube_search import YoutubeSearch # type: ignore
-from discord import app_commands, ui, Interaction
+from discord import app_commands, ui, Interaction #type: ignore
 from pytube import YouTube # type: ignore
 from .utils.functions import LogErrorInWebhook, command_counter, create_embed, convert_str_to_emojis, printFormat, convert_int_to_emojis, is_url, convert_to_minutes_seconds, rename, getMList, display_big_nums, get_next_index, getVar, parse_name_tuple, save_song_stats, format_duration, get_latest_message_from_channel, iso_to_eslapsed_time
 from .utils.path import PLAYLIST_LIST, MUSICS_FOLDER, SOUNDBOARD, MLIST_FOLDER, MAIN_DIR
 from .utils.context import Context as CustomContext
 import traceback, random, os, asyncio, threading, base64, io, discord, lavalink, isodate , html, datetime, re, ast # type: ignore
-from asqlite import Pool
+from asqlite import Pool #type: ignore
 from PIL import Image, ImageDraw, ImageFont
-from aiohttp import ClientSession
+from aiohttp import ClientSession #type: ignore
 from asyncio import sleep
 
 music_table = "musiquesV3"
@@ -135,27 +135,36 @@ class ServerUI:
 
     async def start(self):
         try:
-            print("===== ServerUI.start() started for", self.track_name, "=====")
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ===== ServerUI.start() for", self.track_name, "=====")
             self._running = True
             last_message = None
             if self.txt_channel_id:
                 txt_channel: discord.TextChannel = await self.bot.fetch_channel(self.txt_channel_id)
             else:
-                txt_channel = discord.utils.get(self.player.guild.channels, name="musique", type=discord.ChannelType.text)
+                guild = self.bot.get_guild(self.player.guild_id)
+                txt_channel = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text) if guild else None
+                if txt_channel is None:
+                    self._running = False
+                    return
             
             self.guild_id = txt_channel.guild.id
             if self.guild_id not in self.bot.server_music_session:
                 self.bot.server_music_session[self.guild_id] = {'time': 0, 'nb': 0}
 
             if not self._video:
+                if self.player.current is None:
+                    self._running = False
+                    return
                 try:
                     self.video = VideoDB.from_row(dict(self.player.current.extra))
                 except Exception:
+                    if self.player.current is None:
+                        self._running = False
+                        return
                     result = await download(pool=self.bot.pool, session=self.bot.session, video_id=self.player.current.identifier, downloader=1065781211219370104, is_autoplay=True)
                     if isinstance(result, VideoDB):
                         self.video = result
                         self.player.current.extra = result.to_dict()
-                        self.player.current.extra['txt_channel_id'] = self.txt_channel_id
                     else:
                         raise
             else:
@@ -258,28 +267,33 @@ class ServerUI:
             traceback.print_exc()
 
     async def stop(self):
-        print("[F] ServerUI.stop() for", self.track_name)
+        if not self._running:
+            return
+        self._running = False
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}][F] ServerUI.stop() for", self.track_name)
         if self.played_time > 4:
             await save_song_stats(time=int(self.played_time), number=1, pool=self.bot.pool)
         if self.guild_id in self.bot.server_music_session:
             self.bot.server_music_session[self.guild_id]['nb'] +=  1
             self.bot.server_music_session[self.guild_id]['time'] +=  int(self.played_time)
         if self.ui_message:
-            await asyncio.to_thread(draw_music, self.guild_id, 0, self.video, self.next_musics, True)
             try:
-                raw_txt = f"{self.video.name} ({self.video.pos})"
-                pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
-                match = re.search(pattern, raw_txt)
-                if match:
-                    name = match.group(1)
-                    pos = match.group(2)
-                title = f"Musique {html.unescape(name)} ({pos})"
-            except:
-                title = f"Musique {html.unescape(self.video.name)} (autoplay)"
-            file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_end_music_player.png", filename=f"End.png")
-            view = MusicEndView(bot=self.bot, ctx=discord.Interaction, serverid=self.guild_id, music_title=title)
-            await self.ui_message.edit(attachments=[file], view=view)
-        self._running = False
+                await asyncio.to_thread(draw_music, self.guild_id, 0, self.video, self.next_musics, True)
+                try:
+                    raw_txt = f"{self.video.name} ({self.video.pos})"
+                    pattern = r"\('name', '([^']*)'\)\s*\(\('pos', (\d+)\)\)"
+                    match = re.search(pattern, raw_txt)
+                    if match:
+                        name = match.group(1)
+                        pos = match.group(2)
+                    title = f"Musique {html.unescape(name)} ({pos})"
+                except:
+                    title = f"Musique {html.unescape(self.video.name)} (autoplay)"
+                file = discord.File(f"{MAIN_DIR}/files/{self.guild_id}_end_music_player.png", filename=f"End.png")
+                view = MusicEndView(bot=self.bot, ctx=discord.Interaction, serverid=self.guild_id, music_title=title)
+                await self.ui_message.edit(attachments=[file], view=view)
+            except Exception:
+                pass
 
     @property
     def task(self):
@@ -432,7 +446,7 @@ class MusicMessageView(ui.LayoutView):
             new_position = max(0, self.player.position - 20000)
             await self.player.seek(new_position)
         elif button.custom_id == "forward_time":
-            if self.player.current.duration:
+            if self.player.current and self.player.current.duration:
                 new_position = min(self.player.current.duration, self.player.position + 20000)
                 await self.player.seek(new_position)
         elif button.custom_id == "mlist":
@@ -454,8 +468,8 @@ class MusicMessageView(ui.LayoutView):
             self.player._skip_by_command = True  # Ajout du flag pour différencier skip manuel
             await self.player.skip()
             if track is not None:
-                if self.player.guild.id in self.bot.server_music_session:
-                    self.bot.server_music_session[self.player.guild.id]['nb'] +=  1
+                if self.player.guild_id in self.bot.server_music_session:
+                    self.bot.server_music_session[self.player.guild_id]['nb'] +=  1
                 data = dict(track.extra)
                 try:
                     embed = create_embed(title="Musique", description=f"La musique `{data['name']}` (**{data['pos']}**) a été passé par <@{interaction.user.id}>.", suggestions=["mlist","play", "search"])
@@ -485,8 +499,8 @@ class MusicMessageView(ui.LayoutView):
                 embed = create_embed(title="Musique", description=f"Bot déconnecté du vocal par <@{interaction.user.id}>\nJ'ai joué {self.bot.server_music_session[interaction.guild.id]['nb']} musiques, pour une durée de **{played_time}**!")
             else: embed = create_embed(title="Musique", description=f"Trapard déconnecté du vocal par <@{interaction.user.id}>.")
             await interaction.followup.send(embed=embed,view=EndSessionBtn(bot=self.bot))
-            if self.player.guild.id in self.bot.server_music_session:
-                self.bot.server_music_session[self.player.guild.id] = {'nb': 0, 'time': 0}
+            if self.player.guild_id in self.bot.server_music_session:
+                self.bot.server_music_session[self.player.guild_id] = {'nb': 0, 'time': 0}
         elif button.custom_id == "like":
             songData = VideoDB.from_row(self.player.current.extra)
             async with self.bot.pool.acquire() as conn:
@@ -1917,15 +1931,6 @@ class Music(commands.Cog):
 
         self._register_lavalink_hook()
 
-        if not hasattr(self.bot, 'autoplay_history'):
-            self.bot.autoplay_history = {}
-        if not hasattr(self.bot, 'autoplay_locks'):
-            self.bot.autoplay_locks = {}
-        if not hasattr(self.bot, 'autoplay_enabled'):
-            self.bot.autoplay_enabled = {}
-        if not hasattr(self.bot, 'autoplay_suggestions'):
-            self.bot.autoplay_suggestions = {}
-
     def _register_lavalink_hook(self):
         if not hasattr(self.bot, 'lavalink'):
             return
@@ -1954,7 +1959,7 @@ class Music(commands.Cog):
     @lavalink.listener(lavalink.TrackStartEvent)
     async def on_track_start(self, event: lavalink.TrackStartEvent):
         try:
-            print(f"[I] on_track_start: {event.track}")
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}][I] on_track_start: {event.track}")
             player = event.player
             if not player:
                 print("[I] player was none.")
@@ -1963,6 +1968,18 @@ class Music(commands.Cog):
             guild_id = player.guild_id
             c_auto_queue = getattr(self.bot, 'autoplay_suggestions', {}).get(guild_id, [])
             data = dict(track.extra) if track.extra else {}
+            # Track ALL played songs (manual + autoplay) so streak detection sees manual plays
+            if not hasattr(self.bot, 'autoplay_history'):
+                self.bot.autoplay_history = {}
+            _h = list(self.bot.autoplay_history.get(guild_id, []))
+            _vid_h = data.get('video_id', '') or getattr(track, 'identifier', '') or ''
+            _artist_h = data.get('artiste', '') or getattr(track, 'author', '') or ''
+            _title_h = data.get('name', '') or getattr(track, 'title', '') or ''
+            if _vid_h and not any(e.get('id') == _vid_h for e in _h[-3:]):
+                _h.append({'id': _vid_h, 'artist': _artist_h, 'title': _title_h})
+                self.bot.autoplay_history[guild_id] = _h[-20:]
+            if not hasattr(self.bot, 'autoplay_enabled'):
+                self.bot.autoplay_enabled = {}
             if data:
                 downloader_id = data.get('downloader', data.get('_downloader'))
                 track_name = data.get('name', data.get('_name', getattr(track, 'title', None)))
@@ -2003,22 +2020,28 @@ class Music(commands.Cog):
                 await self.bot.ui_V2[guild_id].stop()
             chann = self.bot.get_channel(player.channel_id)
             if len(player.queue) > 0 and chann and len(chann.members) > 1:
-                await player.play()
+                if not player.is_playing:
+                    await player.play()
             return
 
         track = event.track
-        data = dict(track.extra) if track.extra else {}
+        data = dict(track.extra) if track and track.extra else {}
         chann = self.bot.get_channel(player.channel_id)
         if chann and len(chann.members) == 1:
             try:
+                player.queue.clear()
                 await player.stop()
-                played_time = format_duration(str(self.bot.server_music_session[guild_id]['time']))
-                embed = create_embed(title="Musique", description=f"Fin de session, j'ai joué {self.bot.server_music_session[guild_id]['nb']} musiques, pour une durée de **{played_time}**!")
-                self.bot.server_music_session[player.guild_id] = {'nb': 0, 'time': 0}
-                zic_chann = discord.utils.get(player.guild.channels, name="musique", type=discord.ChannelType.text)
-                if zic_chann is not None:
-                    view = EndSessionBtn(bot=self)
-                    await zic_chann.send(embed=embed,view=view)
+                guild = self.bot.get_guild(guild_id)
+                if guild and guild.voice_client:
+                    await guild.voice_client.disconnect(force=True)
+                played_time = format_duration(str(self.bot.server_music_session.get(guild_id, {}).get('time', 0)))
+                nb = self.bot.server_music_session.get(guild_id, {}).get('nb', 0)
+                embed = create_embed(title="Musique", description=f"Fin de session (plus personne en vocal), j'ai joué {nb} musiques, pour une durée de **{played_time}**!")
+                self.bot.server_music_session[guild_id] = {'nb': 0, 'time': 0}
+                if guild:
+                    zic_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text)
+                    if zic_chann is not None:
+                        await zic_chann.send(embed=embed, view=EndSessionBtn(bot=self.bot))
             except Exception as e:
                 print("X01:", e)
         if data:
@@ -2028,7 +2051,7 @@ class Music(commands.Cog):
         try:
             if guild_id in self.bot.ui_V2:
                 await self.bot.ui_V2[guild_id].stop()
-                print(f"STOPPED UI for guild {guild_id} and track {data.get('name', data.get('_name', 'unknown')) if data else 'unknown'}")
+                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] STOPPED UI for guild {guild_id} and track {data.get('name', data.get('_name', 'unknown')) if data else 'unknown'}")
         except Exception as e:
             print("X0254:", e)
             traceback.print_exc()
@@ -2037,7 +2060,8 @@ class Music(commands.Cog):
             return
 
         if len(player.queue) > 0:
-            await player.play()
+            if not player.is_playing:
+                await player.play()
             return
 
         await self._maybe_autoplay(player=player, last_track=track, last_data=data)
@@ -2323,11 +2347,15 @@ class Music(commands.Cog):
                 self.bot.ui_V2[event.player.guild_id].task.cancel()
         except Exception as e:
             print("X03:", e)
-        try:
-            print("[P] Possible corrupted file:", event.track.extra, event.exception)
-        except:
-            print("[P] Possible corrupted file1:", event.track.title, event.exception)
-        LogErrorInWebhook(f"Music {event.track.title} has crashed.\n{event.exception}")
+        exc_info = (
+            getattr(event, 'exception', None)
+            or getattr(event, 'error', None)
+            or getattr(event, 'cause', None)
+            or str(event)
+        )
+        track_title = getattr(event.track, 'title', '?') if event.track else '?'
+        print(f"[P] TrackException: {track_title} | {exc_info}")
+        LogErrorInWebhook(f"Music {track_title} has crashed.\n{exc_info}")
 
     async def handler_music_input(self, index: str, musique_name:str, channel_name:str, author_voice: bool, author_id:int):
         if musique_name is not None:
