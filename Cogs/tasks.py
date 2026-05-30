@@ -529,7 +529,7 @@ class Tasks(commands.Cog):
     async def lol_patch_notes(self):
         try:
             url = 'https://www.leagueoflegends.com/fr-fr/news/tags/patch-notes/'
-            headers ={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+            headers ={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0', 'Accept-Encoding': 'gzip, deflate'}
             async with self.bot.session.get(url, headers=headers) as response:
                 if response.status == 200:
                     text = await response.text()
