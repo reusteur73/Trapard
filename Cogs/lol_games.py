@@ -260,7 +260,7 @@ class LolGames(commands.Cog):
                             "gained_points": (new_data.data['championPoints'] - data) if new_data.data is not None else 0,
                             "current_progression": f"{new_data.data['championPointsSinceLastLevel']} / {new_data.data['championPointsUntilNextLevel']}" if new_data.data is not None else "0 / 0",
                             "current_level": new_data.data['championLevel'] if new_data.data is not None else 0,
-                            "mastery_image_url": f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{image_level}.cm_updates.png" if new_data.data is not None else None
+                            "mastery_image_url": f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{image_level}.png" if new_data.data is not None else None
                         }
                         return output
 
