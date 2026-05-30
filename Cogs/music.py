@@ -2043,102 +2043,276 @@ class Music(commands.Cog):
         await self._maybe_autoplay(player=player, last_track=track, last_data=data)
         return
 
-    async def _maybe_autoplay(self, *, player, last_track: lavalink.AudioTrack, last_data: dict):
+    async def _autoplay_get_spotify_token(self) -> Optional[str]:
+        try:
+            client_id = getVar("SPOTIFY_CLIENT")
+            client_secret = getVar("SPOTIFY_SECRET")
+            headers = {
+                'Authorization': 'Basic ' + base64.b64encode(
+                    f'{client_id}:{client_secret}'.encode()
+                ).decode()
+            }
+            async with self.bot.session.post(
+                'https://accounts.spotify.com/api/token',
+                data={'grant_type': 'client_credentials'},
+                headers=headers
+            ) as resp:
+                result = await resp.json()
+            return result.get('access_token')
+        except Exception:
+            return None
+
+    @staticmethod
+    def _clean_artist(raw: str) -> str:
+        """AviciiOfficialVEVO → Avicii, Artist - Topic → Artist"""
+        return re.sub(r'(VEVO|Official|\s*-\s*Topic)+$', '', raw, flags=re.IGNORECASE).strip()
+
+    @staticmethod
+    def _clean_title(raw: str) -> str:
+        """Strip YouTube title noise for better Spotify matching: '(Official Video)', '[Lyrics]', etc."""
+        cleaned = re.sub(
+            r'\s*[\(\[].*(official|video|lyrics|audio|hd|4k|music\s*video|clip|live|radio|edit|version|remix|fan\s*mem).*[\)\]]\s*$',
+            '', raw, flags=re.IGNORECASE
+        ).strip()
+        return cleaned if cleaned else raw
+
+    async def _autoplay_spotify_recs(self, title: str, artist: str, token: str, skip_same_artist: bool = False) -> Tuple[List[Tuple[str, str]], List[str]]:
+        """Returns (track_list, related_artist_names). Related artists first for variety.
+        /recommendations deprecated Nov 2024; uses top-tracks + related-artists instead."""
+        headers = {'Authorization': f'Bearer {token}'}
+        clean_artist = self._clean_artist(artist)
+        clean_title = self._clean_title(title)
+
+        # Find artist_id via seed track (try cleaned title first)
+        artist_id = None
+        seed_name = ''
+        for q in [f'track:{clean_title} artist:{clean_artist}', clean_title]:
+            async with self.bot.session.get(
+                'https://api.spotify.com/v1/search',
+                params={'q': q, 'type': 'track', 'limit': 1},
+                headers=headers
+            ) as resp:
+                data = await resp.json()
+            items = data.get('tracks', {}).get('items', [])
+            if items and items[0].get('artists'):
+                artist_id = items[0]['artists'][0]['id']
+                seed_name = items[0]['name'].lower()
+                break
+
+        # Fallback: search artist directly (important when skip_same_artist=True and seed not found)
+        if not artist_id and clean_artist:
+            print(f'[Autoplay] Seed track not found, trying artist search for "{clean_artist}"')
+            async with self.bot.session.get(
+                'https://api.spotify.com/v1/search',
+                params={'q': clean_artist, 'type': 'artist', 'limit': 1},
+                headers=headers
+            ) as resp:
+                art_data = await resp.json()
+            art_items = art_data.get('artists', {}).get('items', [])
+            if art_items:
+                artist_id = art_items[0]['id']
+
+        if not artist_id:
+            return [], []
+
+        related_tracks: List[Tuple[str, str]] = []
+        same_artist_tracks: List[Tuple[str, str]] = []
+        related_artist_names: List[str] = []
+
+        # Related artists → 2 top tracks each (always fetched for variety)
+        async with self.bot.session.get(
+            f'https://api.spotify.com/v1/artists/{artist_id}/related-artists',
+            headers=headers
+        ) as resp:
+            rel_data = await resp.json()
+        for rel in rel_data.get('artists', [])[:6]:
+            rel_name = rel.get('name', '')
+            if rel_name:
+                related_artist_names.append(rel_name)
+            async with self.bot.session.get(
+                f'https://api.spotify.com/v1/artists/{rel["id"]}/top-tracks',
+                params={'market': 'FR'},
+                headers=headers
+            ) as resp:
+                rel_top = await resp.json()
+            for track in rel_top.get('tracks', [])[:2]:
+                a = track['artists'][0]['name'] if track.get('artists') else ''
+                related_tracks.append((a, track['name']))
+
+        # Same-artist top tracks — only when artist hasn't dominated recent history
+        if not skip_same_artist:
+            async with self.bot.session.get(
+                f'https://api.spotify.com/v1/artists/{artist_id}/top-tracks',
+                params={'market': 'FR'},
+                headers=headers
+            ) as resp:
+                top = await resp.json()
+            for track in top.get('tracks', []):
+                if track['name'].lower() != seed_name:
+                    a = track['artists'][0]['name'] if track.get('artists') else ''
+                    same_artist_tracks.append((a, track['name']))
+
+        random.shuffle(related_tracks)
+        random.shuffle(same_artist_tracks)
+        random.shuffle(related_artist_names)
+        return related_tracks + same_artist_tracks, related_artist_names
+
+    async def _autoplay_yt_search(self, query: str, exclude_ids: List[str]) -> Optional[str]:
+        """Search YouTube Music for a track, returns video_id or None."""
+        try:
+            api_key = getVar('YOUTUBE_API')
+            async with self.bot.session.get(
+                'https://www.googleapis.com/youtube/v3/search',
+                params={
+                    'part': 'snippet', 'q': query, 'type': 'video',
+                    'videoCategoryId': '10', 'maxResults': 8, 'key': api_key,
+                }
+            ) as resp:
+                data = await resp.json()
+
+            candidates = [
+                item['id']['videoId']
+                for item in data.get('items', [])
+                if item['id'].get('videoId') and item['id']['videoId'] not in exclude_ids
+            ]
+            if not candidates:
+                return None
+
+            # Filter by duration: skip Shorts (<60s) and very long videos (>15min)
+            async with self.bot.session.get(
+                'https://www.googleapis.com/youtube/v3/videos',
+                params={'part': 'contentDetails,status', 'id': ','.join(candidates[:6]), 'key': api_key}
+            ) as resp:
+                details = await resp.json()
+
+            for item in details.get('items', []):
+                status = item.get('status', {})
+                if status.get('privacyStatus') != 'public':
+                    continue
+                duration = int(isodate.parse_duration(
+                    item['contentDetails']['duration']
+                ).total_seconds())
+                if 60 <= duration <= 900:
+                    return item['id']
+            return candidates[0] if candidates else None
+        except Exception as e:
+            print(f'[Autoplay] YouTube search error for "{query}": {e}')
+            return None
+
+    async def _maybe_autoplay(self, *, player: lavalink.BasePlayer, last_track: lavalink.AudioTrack, last_data: dict):
         try:
             guild_id = player.guild_id
-
             if not getattr(self.bot, 'autoplay_enabled', {}).get(guild_id, True):
+                print('[Autoplay] disabled for this guild')
+                return
+            if len(player.queue) >= 1:
                 return
 
-            lock = self.bot.autoplay_locks.get(guild_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self.bot.autoplay_locks[guild_id] = lock
+            if not hasattr(self.bot, 'autoplay_history'):
+                self.bot.autoplay_history = {}
+            # History: list of {'id': str, 'artist': str, 'title': str}
+            history: List[dict] = list(self.bot.autoplay_history.get(guild_id, []))
 
-            async with lock:
-                chann = self.bot.get_channel(player.channel_id)
-                if len(player.queue) > 0 or not chann or len(chann.members) <= 1:
-                    return
+            last_video_id = last_data.get('video_id') or getattr(last_track, 'identifier', None)
+            last_artist = last_data.get('artiste', '') or ''
+            last_name = last_data.get('name', '') or getattr(last_track, 'title', '') or ''
+            txt_channel_id = last_data.get('txt_channel_id')
 
-                history = self.bot.autoplay_history.get(guild_id)
-                if history is None:
-                    history = []
-                    self.bot.autoplay_history[guild_id] = history
+            clean_last_artist = self._clean_artist(last_artist).lower()
 
-                base_title = last_data.get('name') or last_data.get('_name') or getattr(last_track, 'title', None)
-                if not base_title:
-                    return
+            # How many of the last 5 songs were by the same artist?
+            recent_artists = [self._clean_artist(e.get('artist', '')).lower() for e in history[-5:]]
+            same_artist_streak = sum(1 for a in recent_artists if clean_last_artist and clean_last_artist in a)
+            skip_same_artist = same_artist_streak >= 2
+            if skip_same_artist:
+                print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] Artist "{clean_last_artist}" appeared {same_artist_streak}x recently — skipping their top tracks')
 
-                search_query = f"ytsearch:{base_title}"
-                results = await self.bot.lavalink.get_tracks(search_query)
-                if not results or not getattr(results, 'tracks', None):
-                    return
+            exclude_ids: List[str] = [e['id'] for e in history] + ([last_video_id] if last_video_id else [])
+            seen_titles: set = {re.sub(r'[^a-z0-9]', '', e.get('title', '').lower()) for e in history}
 
-                last_identifier = getattr(last_track, 'identifier', None)
-                chosen = None
-                for t in results.tracks:
-                    ident = getattr(t, 'identifier', None)
-                    if ident and ident == last_identifier:
-                        continue
-                    if ident and ident in history:
-                        continue
-                    chosen = t
-                    break
+            video_ids_to_queue: List[str] = []
+            related_artist_names: List[str] = []
 
-                if chosen is None:
-                    return
-
-                suggestions: List[VideoDB] = []
-                try:
-                    max_suggestions = 3
-                    for t in results.tracks:
-                        if len(suggestions) >= max_suggestions:
+            # 1. Try Spotify recommendations (related artists first, then same-artist)
+            try:
+                token = await self._autoplay_get_spotify_token()
+                if token and last_name:
+                    recs, related_artist_names = await self._autoplay_spotify_recs(last_name, last_artist, token, skip_same_artist=skip_same_artist)
+                    for sp_artist, sp_title in recs:
+                        norm = re.sub(r'[^a-z0-9]', '', sp_title.lower())
+                        if norm in seen_titles:
+                            continue
+                        # Block same-artist tracks even when they appear in related-artist catalogs (collabs)
+                        if clean_last_artist and self._clean_artist(sp_artist).lower() == clean_last_artist:
+                            continue
+                        vid = await self._autoplay_yt_search(
+                            f'{sp_artist} - {sp_title}',
+                            exclude_ids + video_ids_to_queue
+                        )
+                        if vid:
+                            video_ids_to_queue.append(vid)
+                            seen_titles.add(norm)
+                        else:
+                            print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] No YT result for "{sp_artist} - {sp_title}"')
+                        if len(video_ids_to_queue) >= 3:
                             break
-                        ident = getattr(t, 'identifier', None)
-                        if not ident or ident == last_identifier:
-                            continue
-                        if ident == getattr(chosen, 'identifier', None):
-                            continue
-                        if ident in history:
-                            continue
-                        try:
-                            resolved_sug = await download(pool=self.bot.pool, session=self.bot.session, video_id=ident, downloader=1065781211219370104, is_autoplay=True)
-                            if isinstance(resolved_sug, VideoDB):
-                                suggestions.append(resolved_sug)
-                        except Exception:
-                            continue
-                finally:
-                    self.bot.autoplay_suggestions[guild_id] = suggestions
+                    print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] Spotify gave {len(video_ids_to_queue)} suggestion(s) | related_artists={related_artist_names[:3]}')
+            except Exception as e:
+                print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] Spotify path failed: {e}')
 
-                txt_channel_id = last_data.get('txt_channel_id', last_data.get('_txt_chann', last_data.get('_txt_channel_id')))
-                resolved = None
+            # 2. Fallback: use a related artist when same-artist dominated, else use current artist
+            if not video_ids_to_queue:
                 try:
-                    chosen_ident = getattr(chosen, 'identifier', None)
-                    if chosen_ident:
-                        resolved = await download(pool=self.bot.pool, session=self.bot.session, video_id=chosen_ident, downloader=1065781211219370104, is_autoplay=True)
-                except Exception:
-                    resolved = None
+                    if skip_same_artist and related_artist_names:
+                        fallback_q = f'{related_artist_names[0]} songs'
+                    else:
+                        clean_a = self._clean_artist(last_artist)
+                        fallback_q = f'{clean_a} songs' if clean_a else f'{last_name} similar'
+                        if skip_same_artist:
+                            print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] WARNING: skip_same_artist but related_artist_names empty — falling back to "{fallback_q}"')
+                    vid = await self._autoplay_yt_search(fallback_q, exclude_ids)
+                    if vid:
+                        video_ids_to_queue.append(vid)
+                    print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] YouTube fallback ("{fallback_q}"): {vid}')
+                except Exception as e:
+                    print(f'[Autoplay] YouTube fallback failed: {e}')
 
-                if isinstance(resolved, VideoDB):
-                    chosen.extra = resolved.to_dict()
-                    chosen.extra['txt_channel_id'] = txt_channel_id
-                    chosen.extra['autoplay'] = True
-                else:
-                    chosen.extra = {
-                        'txt_channel_id': txt_channel_id,
-                        'autoplay': True,
-                    }
-                ident = getattr(chosen, 'identifier', None)
-                if ident:
-                    history.append(ident)
-                    if len(history) > 25:
-                        del history[:-25]
+            # 3. Add tracks to queue, then play once
+            added = 0
+            for video_id in video_ids_to_queue:
+                try:
+                    video = await download(
+                        pool=self.bot.pool, session=self.bot.session,
+                        video_id=video_id, downloader=1065781211219370104,
+                        is_autoplay=True
+                    )
+                    if not isinstance(video, VideoDB):
+                        continue
+                    results = await self.bot.lavalink.get_tracks(f'https://youtube.com/watch?v={video_id}')
+                    if not results or not results.tracks:
+                        continue
+                    _r = video.to_dict()
+                    _r['txt_channel_id'] = txt_channel_id
+                    _r['autoplay_from'] = 'recommendation'
+                    results.tracks[0].extra = _r
+                    player.add(results.tracks[0])
+                    history.append({
+                        'id': video_id,
+                        'artist': str(video.artiste or ''),
+                        'title': str(video.name or ''),
+                    })
+                    added += 1
+                    print(f'[{datetime.datetime.now().strftime("%H:%M:%S")}][Autoplay] Queued: {video.name} ({video.artiste})')
+                except Exception as e:
+                    print(f'[Autoplay] Failed to add {video_id}: {e}')
 
-                player.add(chosen)
-                if not player.is_playing:
-                    await player.play()
+            self.bot.autoplay_history[guild_id] = history[-20:]
+
+            if added > 0 and not player.is_playing:
+                await player.play()
+
         except Exception as e:
-            print("[I] autoplay error:", e)
+            print(f'[Autoplay] Error: {e}')
             LogErrorInWebhook()
 
     @lavalink.listener(lavalink.TrackExceptionEvent)
