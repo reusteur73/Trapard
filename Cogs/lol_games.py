@@ -66,7 +66,7 @@ class LolGames(commands.Cog):
         self.ongoing_games = {}
 
         self.check_lol_games.start()
-        self.current_game_lol_tracker.start()
+        # self.current_game_lol_tracker.start()
 
     @tasks.loop(seconds=300)
     async def check_lol_games(self):
