@@ -177,22 +177,6 @@ class Trapard(commands.Bot):
                 if DEBUG:
                     print(f'Failed to load extension {extension}.\n{e}')
 
-    async def on_voice_server_update(self, data):
-        """Voice server update handler for lavalink.py"""
-        lavalink_data = {
-            't': 'VOICE_SERVER_UPDATE',
-            'd': data
-        }
-        await self.lavalink.voice_update_handler(lavalink_data)
-
-    async def on_voice_state_update(self, data):
-        """Voice state update handler for lavalink.py"""
-        lavalink_data = {
-            't': 'VOICE_STATE_UPDATE',
-            'd': data
-        }
-        await self.lavalink.voice_update_handler(lavalink_data)
-
     @property
     def owner(self) -> discord.User:
         return self.bot_app_info.owner

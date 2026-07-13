@@ -2,7 +2,7 @@ import io
 from aiohttp import ClientSession
 from .functions import getVar, LogErrorInWebhook, afficher_nombre_fr
 from .classes import APIResponse
-from .path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA, LOL_DRAFT_PLAYER_IMG
+from .path import LOL_IMAGE, LOL_FONT, FILES_PATH, LOL_IMAGE_ARENA, LOL_DRAFT_PLAYER_IMG, MASTERY_ICONS_PATH
 from typing import Literal, Tuple, List
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -111,16 +111,11 @@ class RiotAssetsAPI:
             LogErrorInWebhook(error=f"[LOL] Erreur lors de la récupération du mode de jeu {id} | réponse code : {response.status}")
             return "Mode de jeu inconnu"
 
-    async def get_mastery_icon(self, mastery_level: int) -> Image.Image | None:
-        """Fetches the champion mastery icon image for a given mastery level."""
+    def get_mastery_icon(self, mastery_level: int) -> Image.Image | None:
         if mastery_level > 10:
             mastery_level = 10
-        url = f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{mastery_level}.cm_updates.png"
-        async with self.session.get(url) as response:
-            response.raise_for_status()
-            data = await response.read()
-            return Image.open(BytesIO(data)).convert("RGBA")
-        return None
+        path = f"{MASTERY_ICONS_PATH}mastery_level_{mastery_level}.png"
+        return Image.open(path).convert("RGBA")
 
 class RiotAPI:
     """Riot Games API wrapper."""
@@ -223,13 +218,12 @@ class RiotAPI:
             data = await response.json()
             return str(data[0])
 
-    async def get_puuid_by_summoner_name(self, summoner_name: str, tagline: str, region: str) -> APIResponse:
+    async def get_puuid_by_summoner_name(self, summoner_name: str, tagline: str, region: str) -> str | None:
         region = self._get_region_mapping("regional", region)
-        url = self._make_request(
-            region,
-            f"/riot/account/v1/accounts/by-riot-id/{summoner_name}/{tagline}"
-        )
-        return await self._make_request(region, url)["puuid"]
+        result = await self._make_request(region, f"/riot/account/v1/accounts/by-riot-id/{summoner_name}/{tagline}")
+        if result.data is None:
+            return None
+        return result.data["puuid"]
     
     async def get_match_data(self, match_id: str, region: str) -> APIResponse:
         region = self._get_region_mapping("continental", region)

@@ -132,6 +132,7 @@ class ServerUI:
         self.ui_message = None
         self._video=_video
         self.auto_queue = auto_queue if auto_queue is not None else []
+        self.track_uid = None  # identifiant lavalink de la piste à laquelle cette UI appartient
 
     async def start(self):
         try:
@@ -1947,12 +1948,32 @@ class Music(commands.Cog):
         self._register_lavalink_hook()
 
     async def _lavalink_event_hook(self, event):
+        _now = datetime.datetime.now().strftime('%H:%M:%S')
         if isinstance(event, lavalink.TrackStartEvent):
             return await self.on_track_start(event)
         if isinstance(event, lavalink.TrackEndEvent):
+            print(f"[{_now}][I] TrackEnd: {getattr(event.track, 'title', '?')} | reason={event.reason} | last_pos={getattr(event.player, '_last_position', '?')}ms | queue={len(event.player.queue)}")
             return await self.on_track_end(event)
         if isinstance(event, lavalink.TrackExceptionEvent):
             return await self.on_track_exception(event)
+        if isinstance(event, lavalink.WebSocketClosedEvent):
+            msg = f"Voice WebSocket fermé (guild {event.player.guild_id}): code={event.code} reason={event.reason!r} by_remote={event.by_remote}"
+            print(f"[{_now}][I] {msg}")
+            LogErrorInWebhook(msg)
+            return
+        if isinstance(event, lavalink.TrackLoadFailedEvent):
+            msg = f"TrackLoadFailed: {getattr(event.track, 'title', '?')} | {event.original}"
+            print(f"[{_now}][I] {msg}")
+            LogErrorInWebhook(msg)
+            return
+        if isinstance(event, lavalink.PlayerErrorEvent):
+            msg = f"PlayerError (guild {event.player.guild_id}): {event.original}"
+            print(f"[{_now}][I] {msg}")
+            LogErrorInWebhook(msg)
+            return
+        if isinstance(event, (lavalink.PlayerUpdateEvent, lavalink.IncomingWebSocketMessage)):
+            return
+        print(f"[{_now}][I] Lavalink event: {type(event).__name__}")
         return
     
     # Lavalink.py events
@@ -1991,12 +2012,14 @@ class Music(commands.Cog):
                     print(f"[I] ServerUI missing txt_channel_id. track={getattr(track, 'title', track)} extra_keys={list(data.keys())}")
 
                 music_task = ServerUI(bot=self.bot, player=player, downloader_id=downloader_id, track_name=track_name, track_index=track_index, track_duration=track_duration, txt_channel_id=txt_channel_id, auto_queue=c_auto_queue)
+                music_task.track_uid = getattr(track, 'identifier', None)
                 music_task.task = asyncio.create_task(music_task.start())
                 self.bot.ui_V2[guild_id] = music_task
             else:
                 result = await download(pool=self.bot.pool, session=self.bot.session, video_id=track.identifier, downloader=1065781211219370104, is_autoplay=True)
                 if isinstance(result, VideoDB):
                     music_task = ServerUI(bot=self.bot, player=player, downloader_id=1065781211219370104, track_name=result.name, track_index=None, track_duration=result.duree, txt_channel_id=result.txt_channel_id, _video=result, auto_queue=c_auto_queue)
+                    music_task.track_uid = getattr(track, 'identifier', None)
                     music_task.task = asyncio.create_task(music_task.start())
                     self.bot.ui_V2[guild_id] = music_task
 
@@ -2013,11 +2036,21 @@ class Music(commands.Cog):
             return
         guild_id = player.guild_id
 
+        ended_track_uid = getattr(event.track, 'identifier', None) if event.track else None
+
+        def _ui_of_ended_track():
+            """Retourne l'UI stockée seulement si elle appartient à la piste qui vient de finir (évite de stopper l'UI de la piste suivante)."""
+            ui = self.bot.ui_V2.get(guild_id)
+            if ui is not None and (ended_track_uid is None or getattr(ui, 'track_uid', None) == ended_track_uid):
+                return ui
+            return None
+
         if hasattr(player, "_skip_by_command") and player._skip_by_command:
             print("[I] Skipped by command, not processing end event.")
             player._skip_by_command = False
-            if guild_id in self.bot.ui_V2:
-                await self.bot.ui_V2[guild_id].stop()
+            ui = _ui_of_ended_track()
+            if ui is not None:
+                await ui.stop()
             chann = self.bot.get_channel(player.channel_id)
             if len(player.queue) > 0 and chann and len(chann.members) > 1:
                 if not player.is_playing:
@@ -2026,6 +2059,32 @@ class Music(commands.Cog):
 
         track = event.track
         data = dict(track.extra) if track and track.extra else {}
+
+        # Disjoncteur: si les pistes échouent en série (ex: plugin youtube-source du serveur Lavalink cassé),
+        # on coupe tout au lieu de boucler indéfiniment entre loadFailed et autoplay.
+        if not hasattr(self.bot, 'music_fail_streak'):
+            self.bot.music_fail_streak = {}
+        if event.reason is lavalink.EndReason.LOAD_FAILED:
+            self.bot.music_fail_streak[guild_id] = self.bot.music_fail_streak.get(guild_id, 0) + 1
+        else:
+            self.bot.music_fail_streak[guild_id] = 0
+        if self.bot.music_fail_streak[guild_id] >= 5:
+            self.bot.music_fail_streak[guild_id] = 0
+            player.queue.clear()
+            await player.stop()
+            ui = self.bot.ui_V2.pop(guild_id, None)
+            if ui is not None:
+                await ui.stop()
+            LogErrorInWebhook(f"5 musiques d'affilée en loadFailed sur la guild {guild_id}, lecture stoppée. Vérifier le plugin youtube-source du serveur Lavalink.")
+            txt_chann = self.bot.get_channel(data.get('txt_channel_id')) if data.get('txt_channel_id') else None
+            if txt_chann is None:
+                guild = self.bot.get_guild(guild_id)
+                txt_chann = discord.utils.get(guild.channels, name="musique", type=discord.ChannelType.text) if guild else None
+            if txt_chann is not None:
+                embed = create_embed(title="Musique", description="⚠️ Plusieurs musiques d'affilée n'ont pas pu être lues (erreur de lecture YouTube côté serveur). J'arrête la lecture pour éviter de tourner en boucle.")
+                await txt_chann.send(embed=embed)
+            return
+
         chann = self.bot.get_channel(player.channel_id)
         if chann and len(chann.members) == 1:
             try:
@@ -2049,8 +2108,9 @@ class Music(commands.Cog):
             if last_name is not None:
                 self.bot.last_music[guild_id] = last_name
         try:
-            if guild_id in self.bot.ui_V2:
-                await self.bot.ui_V2[guild_id].stop()
+            ui = _ui_of_ended_track()
+            if ui is not None:
+                await ui.stop()
                 print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] STOPPED UI for guild {guild_id} and track {data.get('name', data.get('_name', 'unknown')) if data else 'unknown'}")
         except Exception as e:
             print("X0254:", e)
@@ -2064,7 +2124,9 @@ class Music(commands.Cog):
                 await player.play()
             return
 
-        await self._maybe_autoplay(player=player, last_track=track, last_data=data)
+        # Pas d'autoplay après un stop manuel/disjoncteur (stopped) ou un remplacement de piste (replaced)
+        if event.reason in (lavalink.EndReason.FINISHED, lavalink.EndReason.LOAD_FAILED):
+            await self._maybe_autoplay(player=player, last_track=track, last_data=data)
         return
 
     async def _autoplay_get_spotify_token(self) -> Optional[str]:
@@ -2342,9 +2404,11 @@ class Music(commands.Cog):
     @lavalink.listener(lavalink.TrackExceptionEvent)
     async def on_track_exception(self, event: lavalink.TrackExceptionEvent):
         try:
-            if event.player.guild_id in self.bot.ui_V2:
-                await self.bot.ui_V2[event.player.guild_id].stop()
-                self.bot.ui_V2[event.player.guild_id].task.cancel()
+            ui = self.bot.ui_V2.get(event.player.guild_id)
+            failed_uid = getattr(event.track, 'identifier', None) if event.track else None
+            if ui is not None and (failed_uid is None or getattr(ui, 'track_uid', None) == failed_uid):
+                await ui.stop()
+                ui.task.cancel()
         except Exception as e:
             print("X03:", e)
         exc_info = (

@@ -128,27 +128,33 @@ def LogErrorInWebhook(error=""):
     """Send error in webhook."""
     error_trace = traceback.format_exc()
 
-    max_len = 2000
-    chunks = [error_trace[i:i+max_len] for i in range(0, len(error_trace), max_len)]
+    text = str(error) if error else error_trace
+    if not text or not text.strip() or text.strip() == "NoneType: None":
+        text = "Erreur générique"
 
-    description = error if error else chunks[0] if chunks else "Erreur générique"
+    # Limites Discord: description 4096, field value 1024, embed total 6000
+    description = text[:4000]
+    rest = text[4000:5000]
 
     embed = discord.Embed(
         title=f'Erreur à {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
         description=f"```yaml\n{description}```"
     )
 
-    for i, chunk in enumerate(chunks[1:], start=2):
-        embed.add_field(name=f"Partie {i}:", value=f"```yaml\n{chunk}```", inline=False)
+    if rest:
+        embed.add_field(name="Suite:", value=f"```yaml\n{rest}```", inline=False)
 
     embed.add_field(name="\u200b", value='<@311013099719360512>', inline=False)
 
     asyncio.create_task(run_async_webhook_error(embed=embed))
 
 async def run_async_webhook_error(embed: discord.Embed):
-    async with ClientSession() as session:
-        webhook = discord.Webhook.from_url(getVar("ERROR_WEBHOOK"), session=session)
-        await webhook.send(embed=embed, username='Trapard Errors Log', avatar_url="https://files.reus.nc/images/rock_sus.png")
+    try:
+        async with ClientSession() as session:
+            webhook = discord.Webhook.from_url(getVar("ERROR_WEBHOOK"), session=session)
+            await webhook.send(embed=embed, username='Trapard Errors Log', avatar_url="https://files.reus.nc/images/rock_sus.png")
+    except Exception as e:
+        print(f"[LogErrorInWebhook] envoi impossible: {e}")
 
 async def command_counter(user_id: str, bot, type:str=None):
     """

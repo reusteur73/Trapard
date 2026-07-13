@@ -180,7 +180,7 @@ class Admin(commands.Cog):
                 if output is not None:
                     print(output, len(output))
                     if (isinstance(output, int)) or (len(output)) == 1:
-                        return await ctx.send(f"Query returned: {output[0]}")
+                        return await ctx.send(f"Query returned: `{' | '.join(map(str, output[0]))}`")
                     print(len(output))
                     embeds = []
                     embed = discord.Embed(title="SQL request")

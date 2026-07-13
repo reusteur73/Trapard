@@ -260,7 +260,6 @@ class LolGames(commands.Cog):
                             "gained_points": (new_data.data['championPoints'] - data) if new_data.data is not None else 0,
                             "current_progression": f"{new_data.data['championPointsSinceLastLevel']} / {new_data.data['championPointsUntilNextLevel']}" if new_data.data is not None else "0 / 0",
                             "current_level": new_data.data['championLevel'] if new_data.data is not None else 0,
-                            "mastery_image_url": f"https://raw.communitydragon.org/latest/game/assets/ux/mastery/legendarychampionmastery/masterycrest_level{image_level}.png" if new_data.data is not None else None
                         }
                         return output
 
@@ -441,7 +440,7 @@ class LolGames(commands.Cog):
                                     ranked_text = f"{new_rank_tier.title()} {new_rank_division} - {new_rank_lp} LP (+{lp_change})" if new_rank_tier is not None else ""
                                 try:
                                     mastery_data = await save_champion_mastery(int(champion_id), puuid, region)
-                                    mastery_image = await self.riot_assets_api.get_mastery_icon(mastery_data['current_level'])
+                                    mastery_image = self.riot_assets_api.get_mastery_icon(mastery_data['current_level'])
                                     channel = self.bot.get_channel(1112233401286672394)
                                     pseudo, rank, queuetype, champion_icon, lvl, rune, sum1, sum2, games_status, game_duartion_to_min, kda, text1, text2, items = await get_drawing_data(match_data, game_duration, mentions, queuetype, raw_data, puuid, region, api_version)
                                     player_list, results, bans = await get_game_data(raw_data, api_version)
